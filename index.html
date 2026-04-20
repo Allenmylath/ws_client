@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Voice Assistant</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0e0e10;
+    font-family: system-ui, -apple-system, sans-serif;
+    color: #e8e8e8;
+  }
+
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    padding: 2rem;
+    max-width: 420px;
+    width: 100%;
+  }
+
+  .title {
+    font-size: 13px;
+    font-weight: 500;
+    color: #555;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .visualizer-wrap {
+    width: 280px;
+    height: 72px;
+    border-radius: 12px;
+    background: #18181c;
+    border: 0.5px solid #2a2a30;
+    overflow: hidden;
+  }
+
+  #waveCanvas { width: 100%; height: 100%; display: block; }
+
+  .mic-ring {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    cursor: pointer;
+  }
+
+  .mic-ring::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 1.5px solid #2e2e38;
+    transition: border-color 0.3s;
+  }
+
+  .mic-ring.active::before {
+    border-color: #5dcaa5;
+    animation: pulse-ring 1.8s ease-out infinite;
+  }
+
+  @keyframes pulse-ring {
+    0%   { transform: scale(1);    opacity: 1; }
+    70%  { transform: scale(1.18); opacity: 0; }
+    100% { transform: scale(1.18); opacity: 0; }
+  }
+
+  .mic-btn {
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    border: 1.5px solid #2e2e38;
+    background: #1e1e26;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, transform 0.1s;
+    outline: none;
+    z-index: 1;
+  }
+
+  .mic-btn:hover { background: #242430; border-color: #3e3e50; }
+  .mic-btn:active { transform: scale(0.95); }
+  .mic-btn.active { background: #0f3d30; border-color: #5dcaa5; }
+
+  .mic-btn svg { width: 30px; height: 30px; fill: #666; transition: fill 0.2s; }
+  .mic-btn.active svg { fill: #5dcaa5; }
+
+  .status {
+    font-size: 13px;
+    color: #444;
+    min-height: 20px;
+    text-align: center;
+    transition: color 0.3s;
+  }
+
+  .status.connected { color: #5dcaa5; }
+  .status.speaking  { color: #fac775; }
+  .status.error     { color: #f09595; }
+
+  .dot {
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-right: 6px;
+    vertical-align: middle;
+    animation: blink 1.2s step-start infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.15; }
+  }
+
+  .hint { font-size: 12px; color: #333; text-align: center; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="container">
+  <p class="title">Voice Assistant</p>
+
+  <div class="visualizer-wrap">
+    <canvas id="waveCanvas"></canvas>
+  </div>
+
+  <div class="mic-ring" id="micRing">
+    <button class="mic-btn" id="micBtn" aria-label="Start conversation">
+      <svg viewBox="0 0 24 24"><path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm6.5 9a.5.5 0 0 1 .5.5A7 7 0 0 1 12.5 17.93V21h2a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1h2v-3.07A7 7 0 0 1 5 10.5a.5.5 0 0 1 1 0 6 6 0 0 0 12 0 .5.5 0 0 1 .5-.5z"/></svg>
+    </button>
+  </div>
+
+  <p class="status" id="status">tap to start</p>
+  <p class="hint">Connects to your Pipecat voice bot.<br>Speak after the session starts.</p>
+</div>
+
+<script>
+const WS_URL      = 'wss://test-pipecat.onrender.com/ws';
+const SAMPLE_RATE = 16000;
+const BUFFER_SIZE = 4096;
+
+const micBtn   = document.getElementById('micBtn');
+const micRing  = document.getElementById('micRing');
+const statusEl = document.getElementById('status');
+const canvas   = document.getElementById('waveCanvas');
+const ctx2d    = canvas.getContext('2d');
+
+let ws, audioCtx, analyser, sourceNode, processor, playbackCtx;
+let playQueue = [], isPlaying = false, active = false, animFrame;
+
+function setStatus(text, cls) {
+  statusEl.className = 'status' + (cls ? ' ' + cls : '');
+  statusEl.innerHTML = cls && cls !== 'error'
+    ? `<span class="dot"></span>${text}`
+    : text;
+}
+
+function resizeCanvas() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  canvas.width  = r.width  * devicePixelRatio;
+  canvas.height = r.height * devicePixelRatio;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+function drawIdle() {
+  const w = canvas.width, h = canvas.height;
+  ctx2d.clearRect(0, 0, w, h);
+  ctx2d.strokeStyle = '#2a2a30';
+  ctx2d.lineWidth = 1;
+  ctx2d.beginPath();
+  ctx2d.moveTo(0, h / 2);
+  ctx2d.lineTo(w, h / 2);
+  ctx2d.stroke();
+}
+
+function drawWave() {
+  animFrame = requestAnimationFrame(drawWave);
+  const w = canvas.width, h = canvas.height;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteTimeDomainData(data);
+  ctx2d.clearRect(0, 0, w, h);
+  ctx2d.strokeStyle = '#5dcaa5';
+  ctx2d.lineWidth = 1.5 * devicePixelRatio;
+  ctx2d.beginPath();
+  const slice = w / data.length;
+  data.forEach((v, i) => {
+    const y = (v / 128) * h / 2;
+    i === 0 ? ctx2d.moveTo(0, y) : ctx2d.lineTo(i * slice, y);
+  });
+  ctx2d.stroke();
+}
+
+function float32ToInt16(f32) {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
+function playNext() {
+  if (!playQueue.length) { isPlaying = false; setStatus('connected — listening', 'connected'); return; }
+  isPlaying = true;
+  const src = playbackCtx.createBufferSource();
+  src.buffer = playQueue.shift();
+  src.connect(playbackCtx.destination);
+  src.onended = playNext;
+  src.start();
+}
+
+function cleanup() {
+  active = false; isPlaying = false; playQueue = [];
+  if (processor)   { processor.disconnect(); processor = null; }
+  if (sourceNode)  { sourceNode.disconnect(); sourceNode = null; }
+  if (audioCtx)    { audioCtx.close(); audioCtx = null; }
+  if (playbackCtx) { playbackCtx.close(); playbackCtx = null; }
+  cancelAnimationFrame(animFrame);
+  micBtn.classList.remove('active');
+  micRing.classList.remove('active');
+  drawIdle();
+}
+
+async function startSession() {
+  if (active) { ws && ws.close(); cleanup(); setStatus('tap to start'); return; }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx    = new AudioContext({ sampleRate: SAMPLE_RATE });
+    playbackCtx = new AudioContext();
+    analyser    = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    sourceNode  = audioCtx.createMediaStreamSource(stream);
+    processor   = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+
+    sourceNode.connect(analyser);
+    sourceNode.connect(processor);
+    processor.connect(audioCtx.destination);
+
+    ws = new WebSocket(WS_URL);
+    ws.binaryType = 'arraybuffer';
+    setStatus('connecting…');
+
+    ws.onopen = () => {
+      active = true;
+      micBtn.classList.add('active');
+      micRing.classList.add('active');
+      setStatus('connected — listening', 'connected');
+      drawWave();
+    };
+
+    ws.onmessage = async ({ data }) => {
+      if (!(data instanceof ArrayBuffer)) return;
+      setStatus('speaking', 'speaking');
+      try {
+        const decoded = await playbackCtx.decodeAudioData(data.slice(0));
+        playQueue.push(decoded);
+        if (!isPlaying) playNext();
+      } catch { setStatus('connected — listening', 'connected'); }
+    };
+
+    ws.onclose = () => { setStatus('disconnected'); cleanup(); };
+    ws.onerror = () => { setStatus('connection error', 'error'); cleanup(); };
+
+    processor.onaudioprocess = ({ inputBuffer }) => {
+      if (ws?.readyState !== WebSocket.OPEN) return;
+      ws.send(float32ToInt16(inputBuffer.getChannelData(0)).buffer);
+    };
+
+  } catch {
+    setStatus('mic access denied', 'error');
+  }
+}
+
+micBtn.addEventListener('click', startSession);
+drawIdle();
+</script>
+</body>
+</html>
