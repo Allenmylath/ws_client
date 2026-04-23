@@ -56,7 +56,7 @@
     font-size: 0.85rem;
     padding: 6px 10px;
     border-radius: 3px;
-    width: 340px;
+    width: 380px;
   }
 
   #meter-wrap {
@@ -99,8 +99,8 @@
 <h1>RUSTVANI</h1>
 
 <div id="url-row">
-  <label>wss://</label>
-  <input id="ws-url" type="text" value="rustvani.onrender.com/ws" />
+  <label>URL</label>
+  <input id="ws-url" type="text" value="wss://rustvani.onrender.com/ws" />
 </div>
 
 <button id="btn">Connect &amp; Record</button>
@@ -118,7 +118,7 @@
 const SAMPLE_RATE    = 16000;
 const CHUNK_SAMPLES  = 512;
 const CHUNK_BYTES    = CHUNK_SAMPLES * 2;
-const PLAYBACK_RATE = 24000;
+const PLAYBACK_RATE  = 24000;
 
 // ---------------------------------------------------------------------------
 // AudioWorklet source — inline as a blob
@@ -175,9 +175,9 @@ let running     = false;
 let playNextAt  = 0;
 
 // Latency tracking
-let lastSendTime   = 0;       // performance.now() of last ws.send()
-let receiving      = false;   // true while server is streaming audio back
-let turnCount      = 0;
+let lastSendTime = 0;
+let receiving    = false;
+let turnCount    = 0;
 
 // ---------------------------------------------------------------------------
 // UI helpers
@@ -202,6 +202,18 @@ function log(msg, cls = 'entry') {
 }
 
 // ---------------------------------------------------------------------------
+// URL helper — accept full ws:// or wss:// URLs as-is,
+// otherwise prepend wss:// so bare hostnames still work.
+// ---------------------------------------------------------------------------
+function resolveWsUrl(input) {
+  const trimmed = input.trim();
+  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) {
+    return trimmed;
+  }
+  return 'wss://' + trimmed;
+}
+
+// ---------------------------------------------------------------------------
 // Playback — decode i16 LE PCM and schedule gapless AudioBuffers
 // ---------------------------------------------------------------------------
 function playPcm(arrayBuf) {
@@ -222,9 +234,7 @@ function playPcm(arrayBuf) {
   src.connect(audioCtx.destination);
 
   const now = audioCtx.currentTime;
-  if (playNextAt < now) {
-    playNextAt = now;
-  }
+  if (playNextAt < now) playNextAt = now;
 
   src.start(playNextAt);
   playNextAt += audioBuf.duration;
@@ -254,7 +264,7 @@ async function start() {
   lastSendTime = 0;
   turnCount    = 0;
 
-  const blob = new Blob([WORKLET_SRC], { type: 'application/javascript' });
+  const blob    = new Blob([WORKLET_SRC], { type: 'application/javascript' });
   const blobUrl = URL.createObjectURL(blob);
   await audioCtx.audioWorklet.addModule(blobUrl);
   URL.revokeObjectURL(blobUrl);
@@ -263,9 +273,8 @@ async function start() {
   workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
   src.connect(workletNode);
 
-  // Connect WebSocket
-  const urlInput = document.getElementById('ws-url').value.trim();
-  const wsUrl    = 'wss://' + urlInput;
+  // Resolve URL — accepts ws://, wss://, or bare hostname
+  const wsUrl = resolveWsUrl(document.getElementById('ws-url').value);
   log(`connecting to ${wsUrl}`, 'info');
   setStatus('connecting…');
   ws = new WebSocket(wsUrl);
@@ -279,26 +288,21 @@ async function start() {
     btn.classList.add('active');
     btn.disabled = false;
 
-    // Mic → server
     workletNode.port.onmessage = ({ data }) => {
       if (!running || ws.readyState !== WebSocket.OPEN) return;
       meter.style.width = Math.min(100, data.peak * 200) + '%';
       ws.send(data.pcm);
       lastSendTime = performance.now();
 
-      // If we were receiving audio and user starts talking again,
-      // reset for next turn
       if (receiving) {
         receiving = false;
       }
     };
   };
 
-  // Server → speakers + latency tracking
   ws.onmessage = (evt) => {
     if (!(evt.data instanceof ArrayBuffer) || evt.data.byteLength === 0) return;
 
-    // First audio chunk of a new response
     if (!receiving) {
       receiving = true;
       turnCount++;
@@ -327,7 +331,7 @@ async function start() {
 // Stop
 // ---------------------------------------------------------------------------
 function stop(sendClose = true) {
-  running   = false;
+  running    = false;
   playNextAt = 0;
   receiving  = false;
 
