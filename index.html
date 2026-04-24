@@ -107,6 +107,15 @@
     font-size: 0.7rem;
     color: #444;
   }
+  #fill-clock-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.75rem;
+    margin-top: 2px;
+  }
+  #fill-clock-label { color: #555; }
+  #fill-clock        { color: #888; font-size: 0.9rem; min-width: 60px; text-align: right; }
 
   #log {
     width: 420px;
@@ -154,7 +163,11 @@
   <div id="buffer-pct-row">
     <span>0 ms</span>
     <span id="buffer-pct-label">—</span>
-    <span id="buffer-max-label">max: —</span>
+    <span id="buffer-max-label">peak: —</span>
+  </div>
+  <div id="fill-clock-row">
+    <span id="fill-clock-label">fill timer (resets at 0)</span>
+    <span id="fill-clock">—</span>
   </div>
 </div>
 
@@ -218,6 +231,10 @@ let rafHandle   = null;
 let playNextAt  = 0;
 let peakBufMs   = 0;   // high-water mark for this session
 
+// Fill clock — measures wall time from buffer=0 until buffer fills
+let fillClockStart = null;   // performance.now() when buffer last hit 0
+let fillClockMs    = 0;      // last recorded elapsed ms
+
 let lastSendTime = 0;
 let receiving    = false;
 let turnCount    = 0;
@@ -230,6 +247,7 @@ const bufferMs      = document.getElementById('buffer-ms');
 const bufferBar     = document.getElementById('buffer-bar');
 const bufferPctLbl  = document.getElementById('buffer-pct-label');
 const bufferMaxLbl  = document.getElementById('buffer-max-label');
+const fillClock     = document.getElementById('fill-clock');
 
 function setStatus(msg, cls = '') {
   status.textContent = msg;
@@ -268,6 +286,22 @@ function updateBufferDisplay() {
   bufferBar.style.width    = pct.toFixed(1) + '%';
   bufferPctLbl.textContent = pct.toFixed(0) + '%  of ' + BAR_MAX_MS + 'ms scale';
   bufferMaxLbl.textContent = 'peak: ' + peakBufMs.toFixed(0) + ' ms';
+
+  // Fill clock: reset when buffer drains to 0, count up while filling
+  if (depthMs < 20) {
+    // Buffer is empty — reset the clock
+    fillClockStart = performance.now();
+    fillClockMs    = 0;
+    fillClock.textContent  = '0 ms';
+    fillClock.style.color  = '#555';
+  } else if (fillClockStart !== null) {
+    fillClockMs           = performance.now() - fillClockStart;
+    fillClock.textContent = fillClockMs.toFixed(0) + ' ms';
+    // Colour matches buffer bar
+    fillClock.style.color = depthMs < 500 ? '#4caf50'
+                          : depthMs < 5000 ? '#ffab00'
+                          : '#f44336';
+  }
 
   // Colour shift: green → amber → red as buffer grows
   if (depthMs < 500) {
@@ -329,6 +363,8 @@ async function start() {
   receiving    = false;
   lastSendTime = 0;
   turnCount    = 0;
+  fillClockStart = null;
+  fillClockMs    = 0;
 
   bufferMs.textContent     = '0 ms';
   bufferBar.style.width    = '0%';
@@ -429,6 +465,8 @@ function stop(sendClose = true) {
   bufferBar.style.width    = '0%';
   bufferMs.textContent     = '—';
   bufferPctLbl.textContent = '—';
+  fillClock.textContent    = '—';
+  fillClockStart           = null;
 
   btn.textContent = 'Connect & Record';
   btn.classList.remove('active');
