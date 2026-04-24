@@ -73,6 +73,41 @@
     transition: width 0.05s;
   }
 
+  /* Buffer display */
+  #buffer-panel {
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #buffer-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.75rem;
+  }
+  #buffer-label { color: #555; }
+  #buffer-ms    { color: #ffab00; font-size: 0.9rem; min-width: 60px; text-align: right; }
+  #buffer-bar-wrap {
+    width: 100%;
+    height: 6px;
+    background: #1a1a1a;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  #buffer-bar {
+    height: 100%;
+    width: 0%;
+    background: #ffab00;
+    border-radius: 3px;
+  }
+  #buffer-pct-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: #444;
+  }
+
   #log {
     width: 420px;
     height: 200px;
@@ -109,20 +144,31 @@
 
 <div id="status">idle</div>
 
+<!-- Buffer depth panel -->
+<div id="buffer-panel">
+  <div id="buffer-row">
+    <span id="buffer-label">client audio buffer</span>
+    <span id="buffer-ms">—</span>
+  </div>
+  <div id="buffer-bar-wrap"><div id="buffer-bar"></div></div>
+  <div id="buffer-pct-row">
+    <span>0 ms</span>
+    <span id="buffer-pct-label">—</span>
+    <span id="buffer-max-label">max: —</span>
+  </div>
+</div>
+
 <div id="log"></div>
 
 <script>
-// ---------------------------------------------------------------------------
-// Constants — must match rustvani server
-// ---------------------------------------------------------------------------
 const SAMPLE_RATE    = 16000;
 const CHUNK_SAMPLES  = 512;
 const CHUNK_BYTES    = CHUNK_SAMPLES * 2;
 const PLAYBACK_RATE  = 24000;
 
-// ---------------------------------------------------------------------------
-// AudioWorklet source — inline as a blob
-// ---------------------------------------------------------------------------
+// Max buffer scale for the bar — 15 seconds
+const BAR_MAX_MS = 15000;
+
 const WORKLET_SRC = `
 class PCMCapture extends AudioWorkletProcessor {
   constructor () {
@@ -162,30 +208,28 @@ class PCMCapture extends AudioWorkletProcessor {
 registerProcessor('pcm-capture', PCMCapture);
 `;
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 let ws          = null;
 let audioCtx    = null;
 let workletNode = null;
 let micStream   = null;
 let running     = false;
+let rafHandle   = null;
 
-// Playback scheduling
 let playNextAt  = 0;
+let peakBufMs   = 0;   // high-water mark for this session
 
-// Latency tracking
 let lastSendTime = 0;
 let receiving    = false;
 let turnCount    = 0;
 
-// ---------------------------------------------------------------------------
-// UI helpers
-// ---------------------------------------------------------------------------
-const btn    = document.getElementById('btn');
-const status = document.getElementById('status');
-const meter  = document.getElementById('meter');
-const logBox = document.getElementById('log');
+const btn           = document.getElementById('btn');
+const status        = document.getElementById('status');
+const meter         = document.getElementById('meter');
+const logBox        = document.getElementById('log');
+const bufferMs      = document.getElementById('buffer-ms');
+const bufferBar     = document.getElementById('buffer-bar');
+const bufferPctLbl  = document.getElementById('buffer-pct-label');
+const bufferMaxLbl  = document.getElementById('buffer-max-label');
 
 function setStatus(msg, cls = '') {
   status.textContent = msg;
@@ -201,21 +245,45 @@ function log(msg, cls = 'entry') {
   logBox.scrollTop = logBox.scrollHeight;
 }
 
-// ---------------------------------------------------------------------------
-// URL helper — accept full ws:// or wss:// URLs as-is,
-// otherwise prepend wss:// so bare hostnames still work.
-// ---------------------------------------------------------------------------
 function resolveWsUrl(input) {
   const trimmed = input.trim();
-  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) {
-    return trimmed;
-  }
+  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) return trimmed;
   return 'wss://' + trimmed;
 }
 
 // ---------------------------------------------------------------------------
-// Playback — decode i16 LE PCM and schedule gapless AudioBuffers
+// Buffer depth monitor — runs every animation frame while connected
 // ---------------------------------------------------------------------------
+function updateBufferDisplay() {
+  if (!audioCtx || !running) return;
+
+  const depthSec = Math.max(0, playNextAt - audioCtx.currentTime);
+  const depthMs  = depthSec * 1000;
+
+  if (depthMs > peakBufMs) peakBufMs = depthMs;
+
+  const pct = Math.min(100, (depthMs / BAR_MAX_MS) * 100);
+
+  bufferMs.textContent     = depthMs.toFixed(0) + ' ms';
+  bufferBar.style.width    = pct.toFixed(1) + '%';
+  bufferPctLbl.textContent = pct.toFixed(0) + '%  of ' + BAR_MAX_MS + 'ms scale';
+  bufferMaxLbl.textContent = 'peak: ' + peakBufMs.toFixed(0) + ' ms';
+
+  // Colour shift: green → amber → red as buffer grows
+  if (depthMs < 500) {
+    bufferBar.style.background = '#4caf50';
+    bufferMs.style.color       = '#4caf50';
+  } else if (depthMs < 5000) {
+    bufferBar.style.background = '#ffab00';
+    bufferMs.style.color       = '#ffab00';
+  } else {
+    bufferBar.style.background = '#f44336';
+    bufferMs.style.color       = '#f44336';
+  }
+
+  rafHandle = requestAnimationFrame(updateBufferDisplay);
+}
+
 function playPcm(arrayBuf) {
   if (!audioCtx || !running) return;
 
@@ -240,9 +308,6 @@ function playPcm(arrayBuf) {
   playNextAt += audioBuf.duration;
 }
 
-// ---------------------------------------------------------------------------
-// Start
-// ---------------------------------------------------------------------------
 async function start() {
   btn.disabled = true;
   setStatus('requesting mic…');
@@ -260,9 +325,15 @@ async function start() {
   log(`AudioContext sampleRate: ${audioCtx.sampleRate} Hz`, 'info');
 
   playNextAt   = 0;
+  peakBufMs    = 0;
   receiving    = false;
   lastSendTime = 0;
   turnCount    = 0;
+
+  bufferMs.textContent     = '0 ms';
+  bufferBar.style.width    = '0%';
+  bufferPctLbl.textContent = '—';
+  bufferMaxLbl.textContent = 'peak: 0 ms';
 
   const blob    = new Blob([WORKLET_SRC], { type: 'application/javascript' });
   const blobUrl = URL.createObjectURL(blob);
@@ -273,7 +344,6 @@ async function start() {
   workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
   src.connect(workletNode);
 
-  // Resolve URL — accepts ws://, wss://, or bare hostname
   const wsUrl = resolveWsUrl(document.getElementById('ws-url').value);
   log(`connecting to ${wsUrl}`, 'info');
   setStatus('connecting…');
@@ -288,15 +358,15 @@ async function start() {
     btn.classList.add('active');
     btn.disabled = false;
 
+    // Start buffer monitor
+    rafHandle = requestAnimationFrame(updateBufferDisplay);
+
     workletNode.port.onmessage = ({ data }) => {
       if (!running || ws.readyState !== WebSocket.OPEN) return;
       meter.style.width = Math.min(100, data.peak * 200) + '%';
       ws.send(data.pcm);
       lastSendTime = performance.now();
-
-      if (receiving) {
-        receiving = false;
-      }
+      if (receiving) receiving = false;
     };
   };
 
@@ -327,13 +397,15 @@ async function start() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Stop
-// ---------------------------------------------------------------------------
 function stop(sendClose = true) {
   running    = false;
   playNextAt = 0;
   receiving  = false;
+
+  if (rafHandle) {
+    cancelAnimationFrame(rafHandle);
+    rafHandle = null;
+  }
 
   if (ws) {
     if (sendClose && ws.readyState === WebSocket.OPEN) ws.close();
@@ -353,7 +425,11 @@ function stop(sendClose = true) {
     audioCtx = null;
   }
 
-  meter.style.width = '0%';
+  meter.style.width        = '0%';
+  bufferBar.style.width    = '0%';
+  bufferMs.textContent     = '—';
+  bufferPctLbl.textContent = '—';
+
   btn.textContent = 'Connect & Record';
   btn.classList.remove('active');
   btn.disabled = false;
@@ -361,9 +437,6 @@ function stop(sendClose = true) {
   log('stopped', 'info');
 }
 
-// ---------------------------------------------------------------------------
-// Button
-// ---------------------------------------------------------------------------
 btn.addEventListener('click', () => {
   if (running) stop();
   else         start();
