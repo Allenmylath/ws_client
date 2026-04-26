@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>rustvani client</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -213,9 +215,11 @@ const PLAYBACK_RATE  = 24000;
 const BAR_MAX_MS = 15000;
 
 // How long to ignore stale audio after an interruption (ms).
-// Stale chunks already in-flight from the server arrive after the
-// interruption JSON — this window drops them silently.
 const IGNORE_AFTER_INTERRUPT_MS = 150;
+
+// Minimum buffered audio (ms) to consider an interruption worthwhile.
+// Avoids spurious interrupts when the bot isn't speaking.
+const MIN_BUFFER_FOR_INTERRUPT_MS = 50;
 
 const WORKLET_SRC = `
 class PCMCapture extends AudioWorkletProcessor {
@@ -262,22 +266,19 @@ let workletNode = null;
 let micStream   = null;
 let running     = false;
 let rafHandle   = null;
+let vadInstance = null;
 
 let playNextAt  = 0;
-let peakBufMs   = 0;   // high-water mark for this session
+let peakBufMs   = 0;
 
-// Fill clock — measures wall time from buffer=0 until buffer fills
-let fillClockStart = null;   // performance.now() when buffer last hit 0
-let fillClockMs    = 0;      // last recorded elapsed ms
+let fillClockStart = null;
+let fillClockMs    = 0;
 
 let lastSendTime = 0;
 let receiving    = false;
 let turnCount    = 0;
 
-// --- Interruption state ---
-// Set of all scheduled AudioBufferSourceNodes so we can .stop() them.
 let activeSources = new Set();
-// Timestamp of last interruption — ignore audio arriving shortly after.
 let lastInterruptAt = 0;
 let interruptCount  = 0;
 let statusRevertTimer = null;
@@ -315,9 +316,12 @@ function resolveWsUrl(input) {
 }
 
 // ---------------------------------------------------------------------------
-// Flush all scheduled playback — called on interruption
+// Flush all scheduled playback
 // ---------------------------------------------------------------------------
-function flushPlayback() {
+function flushPlayback(source) {
+  const bufferedMs = audioCtx
+    ? Math.max(0, (playNextAt - audioCtx.currentTime) * 1000)
+    : 0;
   const killedCount = activeSources.size;
   for (const src of activeSources) {
     try { src.stop(); } catch (_) {}
@@ -327,27 +331,25 @@ function flushPlayback() {
   lastInterruptAt = performance.now();
   interruptCount++;
 
-  // --- Visual feedback ---
-
-  // Update counter
   interruptEl.textContent = interruptCount;
 
-  // Flash status text
   clearTimeout(statusRevertTimer);
   setStatus('interrupted', 'interrupted');
   statusRevertTimer = setTimeout(() => {
     if (running) setStatus('connected — recording', 'connected');
   }, 1200);
 
-  // Flash buffer bar red then collapse
   bufferBar.classList.add('flushed');
   setTimeout(() => bufferBar.classList.remove('flushed'), 500);
 
-  return killedCount;
+  log(
+    `interrupted [${source}] — flushed ${bufferedMs.toFixed(0)}ms, killed ${killedCount} sources`,
+    'interrupt'
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Buffer depth monitor — runs every animation frame while connected
+// Buffer depth monitor
 // ---------------------------------------------------------------------------
 function updateBufferDisplay() {
   if (!audioCtx || !running) return;
@@ -364,7 +366,6 @@ function updateBufferDisplay() {
   bufferPctLbl.textContent = pct.toFixed(0) + '%  of ' + BAR_MAX_MS + 'ms scale';
   bufferMaxLbl.textContent = 'peak: ' + peakBufMs.toFixed(0) + ' ms';
 
-  // Fill clock: reset when buffer drains to 0, count up while filling
   if (depthMs < 20) {
     fillClockStart = performance.now();
     fillClockMs    = 0;
@@ -395,7 +396,6 @@ function updateBufferDisplay() {
 function playPcm(arrayBuf) {
   if (!audioCtx || !running) return;
 
-  // Drop stale audio that arrives shortly after an interruption.
   if (performance.now() - lastInterruptAt < IGNORE_AFTER_INTERRUPT_MS) return;
 
   const i16     = new Int16Array(arrayBuf);
@@ -412,7 +412,6 @@ function playPcm(arrayBuf) {
   src.buffer = audioBuf;
   src.connect(audioCtx.destination);
 
-  // Track this source so we can kill it on interruption.
   activeSources.add(src);
   src.onended = () => activeSources.delete(src);
 
@@ -422,6 +421,48 @@ function playPcm(arrayBuf) {
   src.start(playNextAt);
   playNextAt += audioBuf.duration;
 }
+
+// ---------------------------------------------------------------------------
+// Client-side VAD via @ricky0123/vad-web
+// ---------------------------------------------------------------------------
+async function startVad() {
+  try {
+    vadInstance = await vad.MicVAD.new({
+      onSpeechStart: () => {
+        if (!audioCtx || !running) return;
+
+        const bufferedMs = Math.max(0, (playNextAt - audioCtx.currentTime) * 1000);
+
+        // Only interrupt if there's meaningful buffered playback.
+        // Otherwise the bot isn't speaking — nothing to interrupt.
+        if (bufferedMs < MIN_BUFFER_FOR_INTERRUPT_MS) return;
+
+        flushPlayback('client-vad');
+      },
+      onSpeechEnd: (_audio) => {
+        // Future: could send this VAD-segmented audio to server
+      },
+      onnxWASMBasePath:
+        "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
+      baseAssetPath:
+        "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/",
+    });
+    vadInstance.start();
+    log('client VAD started (vad-web)', 'ok');
+  } catch (e) {
+    log('client VAD failed: ' + e.message, 'err');
+  }
+}
+
+function stopVad() {
+  if (vadInstance) {
+    try { vadInstance.destroy(); } catch (_) {}
+    vadInstance = null;
+    log('client VAD stopped', 'info');
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 async function start() {
   btn.disabled = true;
@@ -486,35 +527,28 @@ async function start() {
       lastSendTime = performance.now();
       if (receiving) receiving = false;
     };
+
+    // Start client-side VAD after connection is live
+    startVad();
   };
 
   ws.onmessage = (evt) => {
-    // --- Text frame: control messages from server ---
     if (typeof evt.data === 'string') {
       try {
         const msg = JSON.parse(evt.data);
         if (msg.type === 'interruption') {
-          const bufferedMs = audioCtx
-            ? Math.max(0, (playNextAt - audioCtx.currentTime) * 1000)
-            : 0;
-          flushPlayback();
-          log(
-            `interrupted — flushed ${bufferedMs.toFixed(0)}ms, killed ${activeSources.size} sources`,
-            'interrupt'
-          );
+          flushPlayback('server');
         }
-      } catch (_) {
-        // Non-JSON text — ignore
-      }
+      } catch (_) {}
       return;
     }
 
-    // --- Binary frame: audio data ---
     if (!(evt.data instanceof ArrayBuffer) || evt.data.byteLength === 0) return;
 
     if (!receiving) {
       receiving = true;
       turnCount++;
+      turnCountEl.textContent = turnCount;
       const latencyMs = performance.now() - lastSendTime;
       log(
         `[turn ${turnCount}] speech→speech: ${latencyMs.toFixed(0)}ms`,
@@ -541,11 +575,13 @@ function stop(sendClose = true) {
   playNextAt = 0;
   receiving  = false;
 
-  // Kill any playing sources.
   for (const src of activeSources) {
     try { src.stop(); } catch (_) {}
   }
   activeSources.clear();
+
+  // Tear down client VAD
+  stopVad();
 
   if (rafHandle) {
     cancelAnimationFrame(rafHandle);
