@@ -437,6 +437,10 @@ async function startVad() {
         // Otherwise the bot isn't speaking — nothing to interrupt.
         if (bufferedMs < MIN_BUFFER_FOR_INTERRUPT_MS) return;
 
+        // Tell server to stop pipeline FIRST, then flush locally
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'client_interruption' }));
+        }
         flushPlayback('client-vad');
       },
       onSpeechEnd: (_audio) => {
