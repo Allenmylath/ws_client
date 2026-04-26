@@ -23,8 +23,14 @@
     color: #555;
     min-height: 1.2em;
   }
-  #status.connected { color: #4caf50; }
-  #status.error     { color: #f44336; }
+  #status.connected   { color: #4caf50; }
+  #status.error       { color: #f44336; }
+  #status.interrupted { color: #ff5252; animation: flash-status 0.3s ease-out; }
+
+  @keyframes flash-status {
+    0%   { color: #fff; text-shadow: 0 0 8px #ff5252; }
+    100% { color: #ff5252; text-shadow: none; }
+  }
 
   #btn {
     padding: 14px 40px;
@@ -100,6 +106,15 @@
     width: 0%;
     background: #ffab00;
     border-radius: 3px;
+    transition: width 0.05s;
+  }
+  #buffer-bar.flushed {
+    background: #ff5252 !important;
+    animation: flash-bar 0.4s ease-out forwards;
+  }
+  @keyframes flash-bar {
+    0%   { width: 100%; opacity: 1; }
+    100% { width: 0%; opacity: 0.3; }
   }
   #buffer-pct-row {
     display: flex;
@@ -136,6 +151,16 @@
   #log .entry.err     { color: #f44336; }
   #log .entry.info    { color: #888; }
   #log .entry.latency { color: #ffab00; }
+  #log .entry.interrupt { color: #ff5252; }
+
+  #stats-row {
+    display: flex;
+    gap: 24px;
+    font-size: 0.75rem;
+    color: #555;
+  }
+  #stats-row .val { color: #888; }
+  #stats-row .val.interrupt-val { color: #ff5252; }
 </style>
 </head>
 <body>
@@ -152,6 +177,11 @@
 <div id="meter-wrap"><div id="meter"></div></div>
 
 <div id="status">idle</div>
+
+<div id="stats-row">
+  <span>turns: <span class="val" id="turn-count">0</span></span>
+  <span>interrupts: <span class="val interrupt-val" id="interrupt-count">0</span></span>
+</div>
 
 <!-- Buffer depth panel -->
 <div id="buffer-panel">
@@ -181,6 +211,11 @@ const PLAYBACK_RATE  = 24000;
 
 // Max buffer scale for the bar — 15 seconds
 const BAR_MAX_MS = 15000;
+
+// How long to ignore stale audio after an interruption (ms).
+// Stale chunks already in-flight from the server arrive after the
+// interruption JSON — this window drops them silently.
+const IGNORE_AFTER_INTERRUPT_MS = 150;
 
 const WORKLET_SRC = `
 class PCMCapture extends AudioWorkletProcessor {
@@ -239,6 +274,14 @@ let lastSendTime = 0;
 let receiving    = false;
 let turnCount    = 0;
 
+// --- Interruption state ---
+// Set of all scheduled AudioBufferSourceNodes so we can .stop() them.
+let activeSources = new Set();
+// Timestamp of last interruption — ignore audio arriving shortly after.
+let lastInterruptAt = 0;
+let interruptCount  = 0;
+let statusRevertTimer = null;
+
 const btn           = document.getElementById('btn');
 const status        = document.getElementById('status');
 const meter         = document.getElementById('meter');
@@ -248,6 +291,8 @@ const bufferBar     = document.getElementById('buffer-bar');
 const bufferPctLbl  = document.getElementById('buffer-pct-label');
 const bufferMaxLbl  = document.getElementById('buffer-max-label');
 const fillClock     = document.getElementById('fill-clock');
+const turnCountEl   = document.getElementById('turn-count');
+const interruptEl   = document.getElementById('interrupt-count');
 
 function setStatus(msg, cls = '') {
   status.textContent = msg;
@@ -270,6 +315,38 @@ function resolveWsUrl(input) {
 }
 
 // ---------------------------------------------------------------------------
+// Flush all scheduled playback — called on interruption
+// ---------------------------------------------------------------------------
+function flushPlayback() {
+  const killedCount = activeSources.size;
+  for (const src of activeSources) {
+    try { src.stop(); } catch (_) {}
+  }
+  activeSources.clear();
+  playNextAt = 0;
+  lastInterruptAt = performance.now();
+  interruptCount++;
+
+  // --- Visual feedback ---
+
+  // Update counter
+  interruptEl.textContent = interruptCount;
+
+  // Flash status text
+  clearTimeout(statusRevertTimer);
+  setStatus('interrupted', 'interrupted');
+  statusRevertTimer = setTimeout(() => {
+    if (running) setStatus('connected — recording', 'connected');
+  }, 1200);
+
+  // Flash buffer bar red then collapse
+  bufferBar.classList.add('flushed');
+  setTimeout(() => bufferBar.classList.remove('flushed'), 500);
+
+  return killedCount;
+}
+
+// ---------------------------------------------------------------------------
 // Buffer depth monitor — runs every animation frame while connected
 // ---------------------------------------------------------------------------
 function updateBufferDisplay() {
@@ -289,7 +366,6 @@ function updateBufferDisplay() {
 
   // Fill clock: reset when buffer drains to 0, count up while filling
   if (depthMs < 20) {
-    // Buffer is empty — reset the clock
     fillClockStart = performance.now();
     fillClockMs    = 0;
     fillClock.textContent  = '0 ms';
@@ -297,13 +373,11 @@ function updateBufferDisplay() {
   } else if (fillClockStart !== null) {
     fillClockMs           = performance.now() - fillClockStart;
     fillClock.textContent = fillClockMs.toFixed(0) + ' ms';
-    // Colour matches buffer bar
     fillClock.style.color = depthMs < 500 ? '#4caf50'
                           : depthMs < 5000 ? '#ffab00'
                           : '#f44336';
   }
 
-  // Colour shift: green → amber → red as buffer grows
   if (depthMs < 500) {
     bufferBar.style.background = '#4caf50';
     bufferMs.style.color       = '#4caf50';
@@ -321,6 +395,9 @@ function updateBufferDisplay() {
 function playPcm(arrayBuf) {
   if (!audioCtx || !running) return;
 
+  // Drop stale audio that arrives shortly after an interruption.
+  if (performance.now() - lastInterruptAt < IGNORE_AFTER_INTERRUPT_MS) return;
+
   const i16     = new Int16Array(arrayBuf);
   const samples = i16.length;
 
@@ -334,6 +411,10 @@ function playPcm(arrayBuf) {
   const src = audioCtx.createBufferSource();
   src.buffer = audioBuf;
   src.connect(audioCtx.destination);
+
+  // Track this source so we can kill it on interruption.
+  activeSources.add(src);
+  src.onended = () => activeSources.delete(src);
 
   const now = audioCtx.currentTime;
   if (playNextAt < now) playNextAt = now;
@@ -358,13 +439,15 @@ async function start() {
   audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
   log(`AudioContext sampleRate: ${audioCtx.sampleRate} Hz`, 'info');
 
-  playNextAt   = 0;
-  peakBufMs    = 0;
-  receiving    = false;
-  lastSendTime = 0;
-  turnCount    = 0;
-  fillClockStart = null;
-  fillClockMs    = 0;
+  playNextAt       = 0;
+  peakBufMs        = 0;
+  receiving        = false;
+  lastSendTime     = 0;
+  turnCount        = 0;
+  fillClockStart   = null;
+  fillClockMs      = 0;
+  lastInterruptAt  = 0;
+  activeSources.clear();
 
   bufferMs.textContent     = '0 ms';
   bufferBar.style.width    = '0%';
@@ -394,7 +477,6 @@ async function start() {
     btn.classList.add('active');
     btn.disabled = false;
 
-    // Start buffer monitor
     rafHandle = requestAnimationFrame(updateBufferDisplay);
 
     workletNode.port.onmessage = ({ data }) => {
@@ -407,6 +489,27 @@ async function start() {
   };
 
   ws.onmessage = (evt) => {
+    // --- Text frame: control messages from server ---
+    if (typeof evt.data === 'string') {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'interruption') {
+          const bufferedMs = audioCtx
+            ? Math.max(0, (playNextAt - audioCtx.currentTime) * 1000)
+            : 0;
+          flushPlayback();
+          log(
+            `interrupted — flushed ${bufferedMs.toFixed(0)}ms, killed ${activeSources.size} sources`,
+            'interrupt'
+          );
+        }
+      } catch (_) {
+        // Non-JSON text — ignore
+      }
+      return;
+    }
+
+    // --- Binary frame: audio data ---
     if (!(evt.data instanceof ArrayBuffer) || evt.data.byteLength === 0) return;
 
     if (!receiving) {
@@ -437,6 +540,12 @@ function stop(sendClose = true) {
   running    = false;
   playNextAt = 0;
   receiving  = false;
+
+  // Kill any playing sources.
+  for (const src of activeSources) {
+    try { src.stop(); } catch (_) {}
+  }
+  activeSources.clear();
 
   if (rafHandle) {
     cancelAnimationFrame(rafHandle);
