@@ -163,6 +163,65 @@
   }
   #stats-row .val { color: #888; }
   #stats-row .val.interrupt-val { color: #ff5252; }
+
+  /* VAD settings panel */
+  #vad-panel {
+    width: 320px;
+    border: 1px solid #222;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  #vad-toggle {
+    width: 100%;
+    background: #141414;
+    border: none;
+    color: #666;
+    font-family: monospace;
+    font-size: 0.75rem;
+    padding: 8px 12px;
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    justify-content: space-between;
+  }
+  #vad-toggle:hover { color: #999; }
+  #vad-toggle .arrow { transition: transform 0.2s; }
+  #vad-toggle.open .arrow { transform: rotate(90deg); }
+  #vad-body {
+    display: none;
+    padding: 12px;
+    background: #111;
+    flex-direction: column;
+    gap: 14px;
+  }
+  #vad-body.open { display: flex; }
+  .vad-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .vad-row label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: #555;
+  }
+  .vad-row label .vad-val { color: #4caf50; font-size: 0.8rem; }
+  .vad-row input[type=range] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 4px;
+    background: #222;
+    border-radius: 2px;
+    outline: none;
+  }
+  .vad-row input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #4caf50;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -200,6 +259,32 @@
   <div id="fill-clock-row">
     <span id="fill-clock-label">fill timer (resets at 0)</span>
     <span id="fill-clock">—</span>
+  </div>
+</div>
+
+<!-- VAD settings panel -->
+<div id="vad-panel">
+  <button id="vad-toggle" onclick="toggleVadPanel()">
+    <span>vad settings</span>
+    <span class="arrow">▶</span>
+  </button>
+  <div id="vad-body">
+    <div class="vad-row">
+      <label>positiveSpeechThreshold <span class="vad-val" id="vad-pos-val">0.70</span></label>
+      <input type="range" id="vad-pos" min="0" max="1" step="0.01" value="0.70">
+    </div>
+    <div class="vad-row">
+      <label>negativeSpeechThreshold <span class="vad-val" id="vad-neg-val">0.55</span></label>
+      <input type="range" id="vad-neg" min="0" max="1" step="0.01" value="0.55">
+    </div>
+    <div class="vad-row">
+      <label>redemptionMs <span class="vad-val" id="vad-red-val">1400</span></label>
+      <input type="range" id="vad-red" min="0" max="3000" step="50" value="1400">
+    </div>
+    <div class="vad-row">
+      <label>minSpeechMs <span class="vad-val" id="vad-min-val">400</span></label>
+      <input type="range" id="vad-min" min="0" max="1500" step="50" value="400">
+    </div>
   </div>
 </div>
 
@@ -428,6 +513,7 @@ function playPcm(arrayBuf) {
 async function startVad() {
   try {
     vadInstance = await vad.MicVAD.new({
+      ...getVadSliderValues(),
       onSpeechStart: () => {
         if (!audioCtx || !running) return;
 
@@ -627,6 +713,53 @@ function stop(sendClose = true) {
 btn.addEventListener('click', () => {
   if (running) stop();
   else         start();
+});
+
+// ---------------------------------------------------------------------------
+// VAD settings panel
+// ---------------------------------------------------------------------------
+function toggleVadPanel() {
+  const toggle = document.getElementById('vad-toggle');
+  const body   = document.getElementById('vad-body');
+  toggle.classList.toggle('open');
+  body.classList.toggle('open');
+}
+
+// Read current slider values for VAD init
+function getVadSliderValues() {
+  return {
+    positiveSpeechThreshold: parseFloat(document.getElementById('vad-pos').value),
+    negativeSpeechThreshold: parseFloat(document.getElementById('vad-neg').value),
+    redemptionMs:            parseInt(document.getElementById('vad-red').value),
+    minSpeechMs:             parseInt(document.getElementById('vad-min').value),
+  };
+}
+
+// Wire up each slider to update label + live setOptions
+['pos', 'neg', 'red', 'min'].forEach(key => {
+  const slider = document.getElementById('vad-' + key);
+  const valEl  = document.getElementById('vad-' + key + '-val');
+
+  slider.addEventListener('input', () => {
+    const v = key === 'red' || key === 'min'
+      ? parseInt(slider.value)
+      : parseFloat(slider.value);
+
+    valEl.textContent = key === 'red' || key === 'min'
+      ? v
+      : v.toFixed(2);
+
+    if (!vadInstance) return;
+
+    const map = {
+      pos: 'positiveSpeechThreshold',
+      neg: 'negativeSpeechThreshold',
+      red: 'redemptionMs',
+      min: 'minSpeechMs',
+    };
+    vadInstance.setOptions({ [map[key]]: v });
+    log(`vad: ${map[key]} → ${key === 'red' || key === 'min' ? v : v.toFixed(2)}`, 'info');
+  });
 });
 </script>
 </body>
