@@ -2,764 +2,415 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>rustvani client</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rustvani</title>
+
+<!--
+  VAD dependency — must load before ES modules.
+  In npm package: replace with import { MicVAD } from '@ricky0123/vad-web'
+-->
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
+
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&display=swap');
+
+  :root {
+    --bg:      #080808;
+    --surface: #0f0f0f;
+    --border:  #1c1c1c;
+    --dim:     #2e2e2e;
+    --muted:   #4a4a4a;
+    --text:    #c8c8c8;
+    --green:   #3ddc84;
+    --amber:   #f5a623;
+    --red:     #ff4444;
+    --blue:    #4d9cff;
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
+
   body {
-    font-family: monospace;
-    background: #0d0d0d;
-    color: #e0e0e0;
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: 1fr 340px;
+    grid-template-areas:
+      "header  header"
+      "main    sidebar"
+      "footer  footer";
+    gap: 1px;
+    background: var(--border);
+  }
+
+  header {
+    grid-area: header;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+  }
+
+  .logo { font-size: 0.75rem; font-weight: 500; letter-spacing: 0.2em; color: var(--muted); }
+  .logo span { color: var(--green); }
+
+  .header-right { display: flex; gap: 20px; }
+  .stat-pill { font-size: 0.7rem; color: var(--muted); display: flex; gap: 6px; }
+  .stat-pill .val     { color: var(--text); }
+  .stat-pill .val.red { color: var(--red); }
+
+  main {
+    grid-area: main;
+    background: var(--bg);
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    gap: 24px;
+    padding: 24px;
+    gap: 20px;
+    overflow: hidden;
   }
-  h1 { font-size: 1.1rem; color: #888; letter-spacing: 2px; }
 
-  #status {
-    font-size: 0.85rem;
-    color: #555;
-    min-height: 1.2em;
+  #transcript {
+    flex: 1; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px;
+    padding-right: 4px;
   }
-  #status.connected   { color: #4caf50; }
-  #status.error       { color: #f44336; }
-  #status.interrupted { color: #ff5252; animation: flash-status 0.3s ease-out; }
+  #transcript::-webkit-scrollbar { width: 3px; }
+  #transcript::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
 
-  @keyframes flash-status {
-    0%   { color: #fff; text-shadow: 0 0 8px #ff5252; }
-    100% { color: #ff5252; text-shadow: none; }
+  .tx-entry { display: flex; flex-direction: column; gap: 2px; animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+  .tx-entry.user { align-items: flex-end; }
+  .tx-entry.bot  { align-items: flex-start; }
+  .tx-label { font-size: 0.6rem; color: var(--muted); letter-spacing: 0.1em; margin: 0 4px; }
+
+  .tx-bubble {
+    max-width: 80%; padding: 8px 12px; border-radius: 3px;
+    font-size: 0.8rem; line-height: 1.5;
   }
+  .tx-entry.user .tx-bubble { background: #0d1f12; color: var(--green); border: 1px solid #1a3322; }
+  .tx-entry.bot  .tx-bubble { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .tx-entry.bot  .tx-bubble.streaming::after {
+    content: '▋'; color: var(--green); animation: blink 0.8s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .tx-placeholder { color: var(--muted); font-size: 0.75rem; text-align: center; margin: auto; opacity: 0.5; }
+
+  .connect-row { display: flex; gap: 8px; }
+
+  #ws-url {
+    flex: 1; background: var(--surface); border: 1px solid var(--border);
+    color: var(--muted); font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem; padding: 9px 12px; border-radius: 3px; outline: none;
+    transition: border-color 0.15s;
+  }
+  #ws-url:focus { border-color: var(--dim); color: var(--text); }
 
   #btn {
-    padding: 14px 40px;
-    font-family: monospace;
-    font-size: 1rem;
-    background: #1a1a1a;
-    color: #e0e0e0;
-    border: 1px solid #333;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    min-width: 180px;
+    padding: 9px 20px; font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem; font-weight: 500; background: var(--surface);
+    color: var(--text); border: 1px solid var(--border); border-radius: 3px;
+    cursor: pointer; white-space: nowrap; transition: all 0.15s; letter-spacing: 0.05em;
   }
-  #btn:hover  { background: #222; border-color: #555; }
-  #btn.active { border-color: #4caf50; color: #4caf50; }
-  #btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  #btn:hover:not(:disabled) { border-color: var(--dim); color: #fff; }
+  #btn.live { border-color: var(--green); color: var(--green); background: #0d1f12; }
+  #btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-  #url-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-  #url-row label { color: #555; font-size: 0.8rem; }
-  #ws-url {
-    background: #111;
-    border: 1px solid #2a2a2a;
-    color: #aaa;
-    font-family: monospace;
-    font-size: 0.85rem;
-    padding: 6px 10px;
-    border-radius: 3px;
-    width: 380px;
-  }
+  aside { grid-area: sidebar; background: var(--bg); display: flex; flex-direction: column; overflow: hidden; }
 
-  #meter-wrap {
-    width: 280px;
-    height: 6px;
-    background: #1a1a1a;
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  #meter {
-    height: 100%;
-    width: 0%;
-    background: #4caf50;
-    transition: width 0.05s;
-  }
+  .panel { border-bottom: 1px solid var(--border); padding: 16px; }
+  .panel-title { font-size: 0.6rem; color: var(--muted); letter-spacing: 0.15em; margin-bottom: 12px; }
 
-  /* Buffer display */
-  #buffer-panel {
-    width: 280px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  #status-dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--dim); margin-right: 6px; transition: background 0.3s;
   }
-  #buffer-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    font-size: 0.75rem;
-  }
-  #buffer-label { color: #555; }
-  #buffer-ms    { color: #ffab00; font-size: 0.9rem; min-width: 60px; text-align: right; }
-  #buffer-bar-wrap {
-    width: 100%;
-    height: 6px;
-    background: #1a1a1a;
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  #buffer-bar {
-    height: 100%;
-    width: 0%;
-    background: #ffab00;
-    border-radius: 3px;
-    transition: width 0.05s;
-  }
-  #buffer-bar.flushed {
-    background: #ff5252 !important;
-    animation: flash-bar 0.4s ease-out forwards;
-  }
-  @keyframes flash-bar {
-    0%   { width: 100%; opacity: 1; }
-    100% { width: 0%; opacity: 0.3; }
-  }
-  #buffer-pct-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.7rem;
-    color: #444;
-  }
-  #fill-clock-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    font-size: 0.75rem;
-    margin-top: 2px;
-  }
-  #fill-clock-label { color: #555; }
-  #fill-clock        { color: #888; font-size: 0.9rem; min-width: 60px; text-align: right; }
+  #status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  #status-dot.error     { background: var(--red); }
+  #status-dot.speaking  { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  #status-text { font-size: 0.75rem; color: var(--muted); }
+
+  .meter-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .meter-label { font-size: 0.6rem; color: var(--muted); width: 24px; }
+  .meter-track { flex: 1; height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+  .meter-fill  { height: 100%; width: 0%; border-radius: 2px; background: var(--green); transition: width 0.04s; }
+
+  .buffer-nums { display: flex; justify-content: space-between; margin-bottom: 6px; }
+  #buf-ms   { font-size: 0.9rem; color: var(--amber); }
+  #buf-peak { font-size: 0.65rem; color: var(--muted); }
+  .buf-track { width: 100%; height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+  #buf-bar  { height: 100%; width: 0%; background: var(--amber); border-radius: 2px; transition: width 0.06s, background 0.3s; }
+  #buf-bar.flush { animation: barFlush 0.4s ease-out forwards; }
+  @keyframes barFlush { 0% { background: var(--red); width: 100%; } 100% { background: var(--red); width: 0%; } }
 
   #log {
-    width: 420px;
-    height: 200px;
-    background: #111;
-    border: 1px solid #1e1e1e;
-    border-radius: 4px;
-    padding: 10px 12px;
-    font-size: 0.75rem;
-    color: #555;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex: 1; overflow-y: auto; padding: 12px;
+    display: flex; flex-direction: column; gap: 3px;
+    font-size: 0.68rem; min-height: 0;
   }
-  #log .entry { color: #666; }
-  #log .entry.ok      { color: #4caf50; }
-  #log .entry.err     { color: #f44336; }
-  #log .entry.info    { color: #888; }
-  #log .entry.latency { color: #ffab00; }
-  #log .entry.interrupt { color: #ff5252; }
+  #log::-webkit-scrollbar { width: 2px; }
+  #log::-webkit-scrollbar-thumb { background: var(--dim); }
+  .log-entry { color: var(--muted); line-height: 1.4; }
+  .log-entry .ts  { color: var(--dim); margin-right: 6px; }
+  .log-entry.ok   .msg { color: var(--green); }
+  .log-entry.err  .msg { color: var(--red); }
+  .log-entry.info .msg { color: var(--muted); }
+  .log-entry.int  .msg { color: var(--red); }
+  .log-entry.turn .msg { color: var(--blue); }
 
-  #stats-row {
-    display: flex;
-    gap: 24px;
-    font-size: 0.75rem;
-    color: #555;
+  footer {
+    grid-area: footer; background: var(--bg);
+    padding: 8px 24px; display: flex; align-items: center; gap: 16px;
+    border-top: 1px solid var(--border);
   }
-  #stats-row .val { color: #888; }
-  #stats-row .val.interrupt-val { color: #ff5252; }
+  footer .f-item { font-size: 0.65rem; color: var(--muted); }
+  footer .f-item .k { color: var(--dim); }
 
-  /* VAD settings panel */
-  #vad-panel {
-    width: 320px;
-    border: 1px solid #222;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  #vad-toggle {
-    width: 100%;
-    background: #141414;
-    border: none;
-    color: #666;
-    font-family: monospace;
-    font-size: 0.75rem;
-    padding: 8px 12px;
-    cursor: pointer;
-    text-align: left;
-    display: flex;
-    justify-content: space-between;
-  }
-  #vad-toggle:hover { color: #999; }
-  #vad-toggle .arrow { transition: transform 0.2s; }
-  #vad-toggle.open .arrow { transform: rotate(90deg); }
-  #vad-body {
-    display: none;
-    padding: 12px;
-    background: #111;
-    flex-direction: column;
-    gap: 14px;
-  }
-  #vad-body.open { display: flex; }
-  .vad-row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .vad-row label {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.7rem;
-    color: #555;
-  }
-  .vad-row label .vad-val { color: #4caf50; font-size: 0.8rem; }
-  .vad-row input[type=range] {
-    -webkit-appearance: none;
-    width: 100%;
-    height: 4px;
-    background: #222;
-    border-radius: 2px;
-    outline: none;
-  }
-  .vad-row input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 12px; height: 12px;
-    border-radius: 50%;
-    background: #4caf50;
-    cursor: pointer;
-  }
+  #vad-state { margin-left: auto; font-size: 0.65rem; color: var(--dim); display: flex; align-items: center; gap: 5px; }
+  #vad-dot   { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); transition: background 0.1s; }
+  #vad-dot.speech { background: var(--red); box-shadow: 0 0 4px var(--red); }
 </style>
 </head>
 <body>
 
-<h1>RUSTVANI</h1>
-
-<div id="url-row">
-  <label>URL</label>
-  <input id="ws-url" type="text" value="wss://rustvani.onrender.com/ws" />
-</div>
-
-<button id="btn">Connect &amp; Record</button>
-
-<div id="meter-wrap"><div id="meter"></div></div>
-
-<div id="status">idle</div>
-
-<div id="stats-row">
-  <span>turns: <span class="val" id="turn-count">0</span></span>
-  <span>interrupts: <span class="val interrupt-val" id="interrupt-count">0</span></span>
-</div>
-
-<!-- Buffer depth panel -->
-<div id="buffer-panel">
-  <div id="buffer-row">
-    <span id="buffer-label">client audio buffer</span>
-    <span id="buffer-ms">—</span>
+<header>
+  <div class="logo">rust<span>vani</span></div>
+  <div class="header-right">
+    <div class="stat-pill">turns <span class="val" id="turn-count">0</span></div>
+    <div class="stat-pill">interrupts <span class="val red" id="int-count">0</span></div>
   </div>
-  <div id="buffer-bar-wrap"><div id="buffer-bar"></div></div>
-  <div id="buffer-pct-row">
-    <span>0 ms</span>
-    <span id="buffer-pct-label">—</span>
-    <span id="buffer-max-label">peak: —</span>
-  </div>
-  <div id="fill-clock-row">
-    <span id="fill-clock-label">fill timer (resets at 0)</span>
-    <span id="fill-clock">—</span>
-  </div>
-</div>
+</header>
 
-<!-- VAD settings panel -->
-<div id="vad-panel">
-  <button id="vad-toggle" onclick="toggleVadPanel()">
-    <span>vad settings</span>
-    <span class="arrow">▶</span>
-  </button>
-  <div id="vad-body">
-    <div class="vad-row">
-      <label>positiveSpeechThreshold <span class="vad-val" id="vad-pos-val">0.70</span></label>
-      <input type="range" id="vad-pos" min="0" max="1" step="0.01" value="0.70">
-    </div>
-    <div class="vad-row">
-      <label>negativeSpeechThreshold <span class="vad-val" id="vad-neg-val">0.55</span></label>
-      <input type="range" id="vad-neg" min="0" max="1" step="0.01" value="0.55">
-    </div>
-    <div class="vad-row">
-      <label>redemptionMs <span class="vad-val" id="vad-red-val">1400</span></label>
-      <input type="range" id="vad-red" min="0" max="3000" step="50" value="1400">
-    </div>
-    <div class="vad-row">
-      <label>minSpeechMs <span class="vad-val" id="vad-min-val">400</span></label>
-      <input type="range" id="vad-min" min="0" max="1500" step="50" value="400">
+<main>
+  <div id="transcript">
+    <div class="tx-placeholder" id="tx-placeholder">connect to begin</div>
+  </div>
+  <div class="connect-row">
+    <input id="ws-url" type="text" value="wss://rustvani.onrender.com/ws" spellcheck="false" />
+    <button id="btn">connect</button>
+  </div>
+</main>
+
+<aside>
+  <div class="panel">
+    <div class="panel-title">STATUS</div>
+    <div><span id="status-dot"></span><span id="status-text">idle</span></div>
+    <div class="meter-row">
+      <span class="meter-label">mic</span>
+      <div class="meter-track"><div class="meter-fill" id="mic-meter"></div></div>
     </div>
   </div>
-</div>
+  <div class="panel">
+    <div class="panel-title">PLAYBACK BUFFER</div>
+    <div class="buffer-nums">
+      <span id="buf-ms">— ms</span>
+      <span id="buf-peak">peak —</span>
+    </div>
+    <div class="buf-track"><div id="buf-bar"></div></div>
+  </div>
+  <div id="log"></div>
+</aside>
 
-<div id="log"></div>
+<footer>
+  <div class="f-item"><span class="k">protocol</span> ravi 1.2.0</div>
+  <div class="f-item"><span class="k">vad</span> silero @0.7</div>
+  <div class="f-item"><span class="k">capture</span> 16 kHz pcm</div>
+  <div id="vad-state"><div id="vad-dot"></div><span id="vad-label">vad off</span></div>
+</footer>
 
-<script>
-const SAMPLE_RATE    = 16000;
-const CHUNK_SAMPLES  = 512;
-const CHUNK_BYTES    = CHUNK_SAMPLES * 2;
-const PLAYBACK_RATE  = 24000;
+<script type="module">
+import { RaviClient } from './src/ravi/client.js';
+import { RaviVad }    from './src/audio/vad.js';
 
-// Max buffer scale for the bar — 15 seconds
-const BAR_MAX_MS = 15000;
+const $ = id => document.getElementById(id);
+const el = {
+  btn:         $('btn'),
+  url:         $('ws-url'),
+  statusDot:   $('status-dot'),
+  statusText:  $('status-text'),
+  micMeter:    $('mic-meter'),
+  bufMs:       $('buf-ms'),
+  bufPeak:     $('buf-peak'),
+  bufBar:      $('buf-bar'),
+  log:         $('log'),
+  transcript:  $('transcript'),
+  placeholder: $('tx-placeholder'),
+  turnCount:   $('turn-count'),
+  intCount:    $('int-count'),
+  vadDot:      $('vad-dot'),
+  vadLabel:    $('vad-label'),
+};
 
-// How long to ignore stale audio after an interruption (ms).
-const IGNORE_AFTER_INTERRUPT_MS = 150;
+let client    = null;
+let vad       = null;
+let rafHandle = null;
+let peakMs    = 0;
+let _botBubble = null;
+let _botAccum  = '';
 
-// Minimum buffered audio (ms) to consider an interruption worthwhile.
-// Avoids spurious interrupts when the bot isn't speaking.
-const MIN_BUFFER_FOR_INTERRUPT_MS = 50;
+// ---- Helpers ----
 
-const WORKLET_SRC = `
-class PCMCapture extends AudioWorkletProcessor {
-  constructor () {
-    super();
-    this._buf = new Float32Array(0);
-  }
-
-  process (inputs) {
-    const ch = inputs[0]?.[0];
-    if (!ch) return true;
-
-    const merged = new Float32Array(this._buf.length + ch.length);
-    merged.set(this._buf);
-    merged.set(ch, this._buf.length);
-    this._buf = merged;
-
-    const CHUNK = ${CHUNK_SAMPLES};
-
-    while (this._buf.length >= CHUNK) {
-      const slice  = this._buf.slice(0, CHUNK);
-      this._buf    = this._buf.slice(CHUNK);
-
-      const i16  = new Int16Array(CHUNK);
-      let   peak = 0;
-      for (let i = 0; i < CHUNK; i++) {
-        const s  = Math.max(-1, Math.min(1, slice[i]));
-        i16[i]   = s < 0 ? s * 0x8000 : s * 0x7FFF;
-        const a  = Math.abs(s);
-        if (a > peak) peak = a;
-      }
-
-      this.port.postMessage({ pcm: i16.buffer, peak }, [i16.buffer]);
-    }
-    return true;
-  }
-}
-registerProcessor('pcm-capture', PCMCapture);
-`;
-
-let ws          = null;
-let audioCtx    = null;
-let workletNode = null;
-let micStream   = null;
-let running     = false;
-let rafHandle   = null;
-let vadInstance = null;
-
-let playNextAt  = 0;
-let peakBufMs   = 0;
-
-let fillClockStart = null;
-let fillClockMs    = 0;
-
-let lastSendTime = 0;
-let receiving    = false;
-let turnCount    = 0;
-
-let activeSources = new Set();
-let lastInterruptAt = 0;
-let interruptCount  = 0;
-let statusRevertTimer = null;
-
-const btn           = document.getElementById('btn');
-const status        = document.getElementById('status');
-const meter         = document.getElementById('meter');
-const logBox        = document.getElementById('log');
-const bufferMs      = document.getElementById('buffer-ms');
-const bufferBar     = document.getElementById('buffer-bar');
-const bufferPctLbl  = document.getElementById('buffer-pct-label');
-const bufferMaxLbl  = document.getElementById('buffer-max-label');
-const fillClock     = document.getElementById('fill-clock');
-const turnCountEl   = document.getElementById('turn-count');
-const interruptEl   = document.getElementById('interrupt-count');
-
-function setStatus(msg, cls = '') {
-  status.textContent = msg;
-  status.className   = cls;
+function setStatus(text, cls = '') {
+  el.statusText.textContent = text;
+  el.statusDot.className    = cls;
 }
 
-function log(msg, cls = 'entry') {
+function log(msg, level = 'info') {
   const t   = new Date().toLocaleTimeString('en-GB', { hour12: false });
-  const div = document.createElement('div');
-  div.className = `entry ${cls}`;
-  div.textContent = `${t}  ${msg}`;
-  logBox.appendChild(div);
-  logBox.scrollTop = logBox.scrollHeight;
+  const row = document.createElement('div');
+  row.className = `log-entry ${level}`;
+  row.innerHTML = `<span class="ts">${t}</span><span class="msg">${msg}</span>`;
+  el.log.appendChild(row);
+  el.log.scrollTop = el.log.scrollHeight;
 }
 
-function resolveWsUrl(input) {
-  const trimmed = input.trim();
-  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) return trimmed;
-  return 'wss://' + trimmed;
+function addUserTranscript(text, isFinal) {
+  if (!text.trim() || !isFinal) return;
+  el.placeholder.style.display = 'none';
+  const e = document.createElement('div');
+  e.className = 'tx-entry user';
+  e.innerHTML = `<div class="tx-label">you</div><div class="tx-bubble">${text}</div>`;
+  el.transcript.appendChild(e);
+  el.transcript.scrollTop = el.transcript.scrollHeight;
 }
 
-// ---------------------------------------------------------------------------
-// Flush all scheduled playback
-// ---------------------------------------------------------------------------
-function flushPlayback(source) {
-  const bufferedMs = audioCtx
-    ? Math.max(0, (playNextAt - audioCtx.currentTime) * 1000)
-    : 0;
-  const killedCount = activeSources.size;
-  for (const src of activeSources) {
-    try { src.stop(); } catch (_) {}
+function appendBotToken(text) {
+  el.placeholder.style.display = 'none';
+  if (!_botBubble) {
+    const e = document.createElement('div');
+    e.className = 'tx-entry bot';
+    e.innerHTML = '<div class="tx-label">vani</div><div class="tx-bubble streaming"></div>';
+    el.transcript.appendChild(e);
+    _botBubble = e.querySelector('.tx-bubble');
+    _botAccum  = '';
   }
-  activeSources.clear();
-  playNextAt = 0;
-  lastInterruptAt = performance.now();
-  interruptCount++;
-
-  interruptEl.textContent = interruptCount;
-
-  clearTimeout(statusRevertTimer);
-  setStatus('interrupted', 'interrupted');
-  statusRevertTimer = setTimeout(() => {
-    if (running) setStatus('connected — recording', 'connected');
-  }, 1200);
-
-  bufferBar.classList.add('flushed');
-  setTimeout(() => bufferBar.classList.remove('flushed'), 500);
-
-  log(
-    `interrupted [${source}] — flushed ${bufferedMs.toFixed(0)}ms, killed ${killedCount} sources`,
-    'interrupt'
-  );
+  _botAccum += text;
+  _botBubble.textContent = _botAccum;
+  el.transcript.scrollTop = el.transcript.scrollHeight;
 }
 
-// ---------------------------------------------------------------------------
-// Buffer depth monitor
-// ---------------------------------------------------------------------------
-function updateBufferDisplay() {
-  if (!audioCtx || !running) return;
-
-  const depthSec = Math.max(0, playNextAt - audioCtx.currentTime);
-  const depthMs  = depthSec * 1000;
-
-  if (depthMs > peakBufMs) peakBufMs = depthMs;
-
-  const pct = Math.min(100, (depthMs / BAR_MAX_MS) * 100);
-
-  bufferMs.textContent     = depthMs.toFixed(0) + ' ms';
-  bufferBar.style.width    = pct.toFixed(1) + '%';
-  bufferPctLbl.textContent = pct.toFixed(0) + '%  of ' + BAR_MAX_MS + 'ms scale';
-  bufferMaxLbl.textContent = 'peak: ' + peakBufMs.toFixed(0) + ' ms';
-
-  if (depthMs < 20) {
-    fillClockStart = performance.now();
-    fillClockMs    = 0;
-    fillClock.textContent  = '0 ms';
-    fillClock.style.color  = '#555';
-  } else if (fillClockStart !== null) {
-    fillClockMs           = performance.now() - fillClockStart;
-    fillClock.textContent = fillClockMs.toFixed(0) + ' ms';
-    fillClock.style.color = depthMs < 500 ? '#4caf50'
-                          : depthMs < 5000 ? '#ffab00'
-                          : '#f44336';
-  }
-
-  if (depthMs < 500) {
-    bufferBar.style.background = '#4caf50';
-    bufferMs.style.color       = '#4caf50';
-  } else if (depthMs < 5000) {
-    bufferBar.style.background = '#ffab00';
-    bufferMs.style.color       = '#ffab00';
-  } else {
-    bufferBar.style.background = '#f44336';
-    bufferMs.style.color       = '#f44336';
-  }
-
-  rafHandle = requestAnimationFrame(updateBufferDisplay);
+function finalizeBotBubble() {
+  if (_botBubble) { _botBubble.classList.remove('streaming'); _botBubble = null; _botAccum = ''; }
 }
 
-function playPcm(arrayBuf) {
-  if (!audioCtx || !running) return;
-
-  if (performance.now() - lastInterruptAt < IGNORE_AFTER_INTERRUPT_MS) return;
-
-  const i16     = new Int16Array(arrayBuf);
-  const samples = i16.length;
-
-  const audioBuf = audioCtx.createBuffer(1, samples, PLAYBACK_RATE);
-  const channel  = audioBuf.getChannelData(0);
-
-  for (let i = 0; i < samples; i++) {
-    channel[i] = i16[i] / 32768.0;
+function startBufferLoop() {
+  function tick() {
+    if (!client?.isRunning) return;
+    const ms = client.bufferedMs;
+    if (client.peakMs > peakMs) peakMs = client.peakMs;
+    el.bufMs.textContent   = ms.toFixed(0) + ' ms';
+    el.bufPeak.textContent = 'peak ' + peakMs.toFixed(0);
+    el.bufBar.style.width  = Math.min(100, (ms / 15_000) * 100).toFixed(1) + '%';
+    const c = ms < 500 ? 'var(--green)' : ms < 5_000 ? 'var(--amber)' : 'var(--red)';
+    el.bufBar.style.background = c;
+    el.bufMs.style.color       = c;
+    rafHandle = requestAnimationFrame(tick);
   }
-
-  const src = audioCtx.createBufferSource();
-  src.buffer = audioBuf;
-  src.connect(audioCtx.destination);
-
-  activeSources.add(src);
-  src.onended = () => activeSources.delete(src);
-
-  const now = audioCtx.currentTime;
-  if (playNextAt < now) playNextAt = now;
-
-  src.start(playNextAt);
-  playNextAt += audioBuf.duration;
+  rafHandle = requestAnimationFrame(tick);
 }
 
-// ---------------------------------------------------------------------------
-// Client-side VAD via @ricky0123/vad-web
-// ---------------------------------------------------------------------------
-async function startVad() {
-  try {
-    vadInstance = await vad.MicVAD.new({
-      ...getVadSliderValues(),
-      onSpeechStart: () => {
-        if (!audioCtx || !running) return;
-
-        const bufferedMs = Math.max(0, (playNextAt - audioCtx.currentTime) * 1000);
-
-        // Only interrupt if there's meaningful buffered playback.
-        // Otherwise the bot isn't speaking — nothing to interrupt.
-        if (bufferedMs < MIN_BUFFER_FOR_INTERRUPT_MS) return;
-
-        // Tell server to stop pipeline FIRST, then flush locally
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'client_interruption' }));
-        }
-        flushPlayback('client-vad');
-      },
-      onSpeechEnd: (_audio) => {
-        // Future: could send this VAD-segmented audio to server
-      },
-      onnxWASMBasePath:
-        "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
-      baseAssetPath:
-        "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/",
-    });
-    vadInstance.start();
-    log('client VAD started (vad-web)', 'ok');
-  } catch (e) {
-    log('client VAD failed: ' + e.message, 'err');
-  }
+function stopBufferLoop() {
+  if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = null; }
+  el.bufMs.textContent   = '— ms';
+  el.bufPeak.textContent = 'peak —';
+  el.bufBar.style.width  = '0%';
+  peakMs = 0;
 }
 
-function stopVad() {
-  if (vadInstance) {
-    try { vadInstance.destroy(); } catch (_) {}
-    vadInstance = null;
-    log('client VAD stopped', 'info');
-  }
-}
+// ---- Connect / disconnect ----
 
-// ---------------------------------------------------------------------------
+async function connect() {
+  el.btn.disabled = true;
+  setStatus('connecting…', '');
 
-async function start() {
-  btn.disabled = true;
-  setStatus('requesting mic…');
+  client = new RaviClient({
+    onConnected()     { setStatus('connected', 'connected'); el.btn.textContent = 'disconnect'; el.btn.classList.add('live'); el.btn.disabled = false; startBufferLoop(); log('connected', 'ok'); },
+    onDisconnected()  { teardown(); },
+    onBotReady()      { setStatus('ready', 'connected'); },
+    onBotStartedSpeaking() { setStatus('bot speaking', 'speaking'); },
+    onBotStoppedSpeaking() { setStatus('ready', 'connected'); finalizeBotBubble(); },
+    onUserStartedSpeaking() { setStatus('listening…', 'connected'); },
+    onUserStoppedSpeaking() { setStatus('processing…', 'connected'); },
+    onUserTranscript(data)  { addUserTranscript(data.text, data.final); },
+    onBotLlmStarted()  { log('llm started', 'info'); },
+    onBotLlmStopped()  { log('llm stopped', 'info'); },
+    onBotLlmText(text) { appendBotToken(text); },
+    onInterrupt(source, flushedMs, count) {
+      el.intCount.textContent = count;
+      el.bufBar.classList.remove('flush');
+      void el.bufBar.offsetWidth;
+      el.bufBar.classList.add('flush');
+      setTimeout(() => el.bufBar.classList.remove('flush'), 500);
+      setStatus('interrupted', 'error');
+      setTimeout(() => { if (client?.isRunning) setStatus('ready', 'connected'); }, 1_000);
+      log(`interrupt [${source}] — flushed ${flushedMs.toFixed(0)} ms`, 'int');
+    },
+    onTurn(n, latencyMs)   { el.turnCount.textContent = n; log(`turn ${n} — ${latencyMs.toFixed(0)} ms`, 'turn'); },
+    onAudioLevel(peak)     { el.micMeter.style.width = Math.min(100, peak * 200) + '%'; },
+    onError(msg)           { log(msg, 'err'); setStatus('error', 'error'); },
+    onLog(msg, level)      { log(msg, level); },
+  });
+
+  const raw = el.url.value.trim();
+  const url = raw.startsWith('ws') ? raw : 'wss://' + raw;
 
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    await client.connect(url);
   } catch (e) {
-    setStatus('mic denied', 'error');
-    log('mic error: ' + e.message, 'err');
-    btn.disabled = false;
+    log('connect failed: ' + e.message, 'err');
+    setStatus('failed', 'error');
+    client = null;
+    el.btn.disabled = false;
     return;
   }
 
-  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  log(`AudioContext sampleRate: ${audioCtx.sampleRate} Hz`, 'info');
-
-  playNextAt       = 0;
-  peakBufMs        = 0;
-  receiving        = false;
-  lastSendTime     = 0;
-  turnCount        = 0;
-  fillClockStart   = null;
-  fillClockMs      = 0;
-  lastInterruptAt  = 0;
-  activeSources.clear();
-
-  bufferMs.textContent     = '0 ms';
-  bufferBar.style.width    = '0%';
-  bufferPctLbl.textContent = '—';
-  bufferMaxLbl.textContent = 'peak: 0 ms';
-
-  const blob    = new Blob([WORKLET_SRC], { type: 'application/javascript' });
-  const blobUrl = URL.createObjectURL(blob);
-  await audioCtx.audioWorklet.addModule(blobUrl);
-  URL.revokeObjectURL(blobUrl);
-
-  const src = audioCtx.createMediaStreamSource(micStream);
-  workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture');
-  src.connect(workletNode);
-
-  const wsUrl = resolveWsUrl(document.getElementById('ws-url').value);
-  log(`connecting to ${wsUrl}`, 'info');
-  setStatus('connecting…');
-  ws = new WebSocket(wsUrl);
-  ws.binaryType = 'arraybuffer';
-
-  ws.onopen = () => {
-    log('connected', 'ok');
-    setStatus('connected — recording', 'connected');
-    running = true;
-    btn.textContent = 'Stop';
-    btn.classList.add('active');
-    btn.disabled = false;
-
-    rafHandle = requestAnimationFrame(updateBufferDisplay);
-
-    workletNode.port.onmessage = ({ data }) => {
-      if (!running || ws.readyState !== WebSocket.OPEN) return;
-      meter.style.width = Math.min(100, data.peak * 200) + '%';
-      ws.send(data.pcm);
-      lastSendTime = performance.now();
-      if (receiving) receiving = false;
-    };
-
-    // Start client-side VAD after connection is live
-    startVad();
-  };
-
-  ws.onmessage = (evt) => {
-    if (typeof evt.data === 'string') {
-      try {
-        const msg = JSON.parse(evt.data);
-        if (msg.type === 'interruption') {
-          flushPlayback('server');
-        }
-      } catch (_) {}
-      return;
-    }
-
-    if (!(evt.data instanceof ArrayBuffer) || evt.data.byteLength === 0) return;
-
-    if (!receiving) {
-      receiving = true;
-      turnCount++;
-      turnCountEl.textContent = turnCount;
-      const latencyMs = performance.now() - lastSendTime;
-      log(
-        `[turn ${turnCount}] speech→speech: ${latencyMs.toFixed(0)}ms`,
-        'latency'
-      );
-    }
-
-    playPcm(evt.data);
-  };
-
-  ws.onclose = () => {
-    log('disconnected', 'err');
-    stop(false);
-  };
-
-  ws.onerror = () => {
-    log('WebSocket error', 'err');
-    setStatus('connection error', 'error');
-  };
-}
-
-function stop(sendClose = true) {
-  running    = false;
-  playNextAt = 0;
-  receiving  = false;
-
-  for (const src of activeSources) {
-    try { src.stop(); } catch (_) {}
-  }
-  activeSources.clear();
-
-  // Tear down client VAD
-  stopVad();
-
-  if (rafHandle) {
-    cancelAnimationFrame(rafHandle);
-    rafHandle = null;
-  }
-
-  if (ws) {
-    if (sendClose && ws.readyState === WebSocket.OPEN) ws.close();
-    ws = null;
-  }
-  if (workletNode) {
-    workletNode.disconnect();
-    workletNode.port.onmessage = null;
-    workletNode = null;
-  }
-  if (micStream) {
-    micStream.getTracks().forEach(t => t.stop());
-    micStream = null;
-  }
-  if (audioCtx) {
-    audioCtx.close();
-    audioCtx = null;
-  }
-
-  meter.style.width        = '0%';
-  bufferBar.style.width    = '0%';
-  bufferMs.textContent     = '—';
-  bufferPctLbl.textContent = '—';
-  fillClock.textContent    = '—';
-  fillClockStart           = null;
-
-  btn.textContent = 'Connect & Record';
-  btn.classList.remove('active');
-  btn.disabled = false;
-  setStatus('idle');
-  log('stopped', 'info');
-}
-
-btn.addEventListener('click', () => {
-  if (running) stop();
-  else         start();
-});
-
-// ---------------------------------------------------------------------------
-// VAD settings panel
-// ---------------------------------------------------------------------------
-function toggleVadPanel() {
-  const toggle = document.getElementById('vad-toggle');
-  const body   = document.getElementById('vad-body');
-  toggle.classList.toggle('open');
-  body.classList.toggle('open');
-}
-
-// Read current slider values for VAD init
-function getVadSliderValues() {
-  return {
-    positiveSpeechThreshold: parseFloat(document.getElementById('vad-pos').value),
-    negativeSpeechThreshold: parseFloat(document.getElementById('vad-neg').value),
-    redemptionMs:            parseInt(document.getElementById('vad-red').value),
-    minSpeechMs:             parseInt(document.getElementById('vad-min').value),
-  };
-}
-
-// Wire up each slider to update label + live setOptions
-['pos', 'neg', 'red', 'min'].forEach(key => {
-  const slider = document.getElementById('vad-' + key);
-  const valEl  = document.getElementById('vad-' + key + '-val');
-
-  slider.addEventListener('input', () => {
-    const v = key === 'red' || key === 'min'
-      ? parseInt(slider.value)
-      : parseFloat(slider.value);
-
-    valEl.textContent = key === 'red' || key === 'min'
-      ? v
-      : v.toFixed(2);
-
-    if (!vadInstance) return;
-
-    const map = {
-      pos: 'positiveSpeechThreshold',
-      neg: 'negativeSpeechThreshold',
-      red: 'redemptionMs',
-      min: 'minSpeechMs',
-    };
-    vadInstance.setOptions({ [map[key]]: v });
-    log(`vad: ${map[key]} → ${key === 'red' || key === 'min' ? v : v.toFixed(2)}`, 'info');
+  // Start VAD after client is connected.
+  // VAD calls client.interrupt('vad') on speech — client owns whether to act on it.
+  vad = new RaviVad({
+    onSpeechStart: () => {
+      el.vadDot.classList.add('speech');
+      client.interrupt('vad');  // no-op if bot not speaking
+    },
+    onSpeechEnd: () => {
+      el.vadDot.classList.remove('speech');
+    },
   });
+
+  try {
+    await vad.start();
+    el.vadLabel.textContent = 'vad active';
+    log('vad ready (threshold 0.70)', 'ok');
+  } catch (e) {
+    log('vad failed: ' + e.message, 'err');
+  }
+}
+
+function teardown() {
+  stopBufferLoop();
+  finalizeBotBubble();
+  vad?.stop();
+  vad = null;
+  el.btn.textContent = 'connect';
+  el.btn.classList.remove('live');
+  el.btn.disabled    = false;
+  el.micMeter.style.width = '0%';
+  el.vadDot.classList.remove('speech');
+  el.vadLabel.textContent = 'vad off';
+  setStatus('idle', '');
+  log('disconnected', 'err');
+  client = null;
+}
+
+function disconnect() { client?.disconnect(); teardown(); }
+
+el.btn.addEventListener('click', () => {
+  if (client?.isRunning) disconnect();
+  else                   connect();
 });
 </script>
 </body>
