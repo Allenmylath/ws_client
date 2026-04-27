@@ -2,311 +2,740 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>rustvani</title>
 
-<!--
-  VAD dependency — must load before ES modules.
-  In npm package: replace with import { MicVAD } from '@ricky0123/vad-web'
--->
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
 
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&display=swap');
 
-  :root {
-    --bg:      #080808;
-    --surface: #0f0f0f;
-    --border:  #1c1c1c;
-    --dim:     #2e2e2e;
-    --muted:   #4a4a4a;
-    --text:    #c8c8c8;
-    --green:   #3ddc84;
-    --amber:   #f5a623;
-    --red:     #ff4444;
-    --blue:    #4d9cff;
-  }
+/* ── Tokens ─────────────────────────────────────────────────────── */
+:root {
+  --bg:       #080808;
+  --surface:  #0f0f0f;
+  --border:   #1c1c1c;
+  --dim:      #2a2a2a;
+  --muted:    #484848;
+  --text:     #c4c4c4;
+  --green:    #3ddc84;
+  --amber:    #f5a623;
+  --red:      #ff4444;
+  --blue:     #4d9cff;
+  --font:     'IBM Plex Mono', monospace;
+  --safe-b:   env(safe-area-inset-bottom, 0px);
+  --safe-t:   env(safe-area-inset-top, 0px);
+}
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+/* ── Reset ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; -webkit-text-size-adjust: 100%; }
 
-  body {
-    font-family: 'IBM Plex Mono', monospace;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    display: grid;
-    grid-template-rows: auto 1fr auto;
-    grid-template-columns: 1fr 340px;
-    grid-template-areas:
-      "header  header"
-      "main    sidebar"
-      "footer  footer";
-    gap: 1px;
-    background: var(--border);
-  }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  height: 100dvh;           /* dynamic viewport — handles iOS toolbar */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
-  header {
-    grid-area: header;
-    background: var(--bg);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 24px;
-  }
+/* ── Header ─────────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  flex-shrink: 0;
+  min-height: 50px;
+  background: var(--bg);
+}
 
-  .logo { font-size: 0.75rem; font-weight: 500; letter-spacing: 0.2em; color: var(--muted); }
-  .logo span { color: var(--green); }
+.logo {
+  font-size: 0.72rem; font-weight: 500;
+  letter-spacing: 0.22em; color: var(--muted);
+  flex-shrink: 0;
+}
+.logo span { color: var(--green); }
 
-  .header-right { display: flex; gap: 20px; }
-  .stat-pill { font-size: 0.7rem; color: var(--muted); display: flex; gap: 6px; }
-  .stat-pill .val     { color: var(--text); }
-  .stat-pill .val.red { color: var(--red); }
+/* desktop URL row ─ hidden on mobile */
+.url-row {
+  flex: 1; display: none;
+  gap: 8px; align-items: center;
+}
 
-  main {
-    grid-area: main;
-    background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    padding: 24px;
-    gap: 20px;
-    overflow: hidden;
-  }
+.header-right {
+  display: flex; align-items: center; gap: 10px;
+  margin-left: auto;
+}
 
-  #transcript {
-    flex: 1; overflow-y: auto;
-    display: flex; flex-direction: column; gap: 10px;
-    padding-right: 4px;
-  }
-  #transcript::-webkit-scrollbar { width: 3px; }
-  #transcript::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
+/* desktop stats ─ hidden on mobile */
+.header-stats {
+  display: none; gap: 16px;
+}
 
-  .tx-entry { display: flex; flex-direction: column; gap: 2px; animation: fadeIn 0.2s ease; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+.stat-pill { font-size: 0.65rem; color: var(--muted); }
+.stat-pill .val     { color: var(--text); }
+.stat-pill .val.red { color: var(--red); }
 
-  .tx-entry.user { align-items: flex-end; }
-  .tx-entry.bot  { align-items: flex-start; }
-  .tx-label { font-size: 0.6rem; color: var(--muted); letter-spacing: 0.1em; margin: 0 4px; }
+.status-pill {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 0.68rem; color: var(--muted);
+}
 
-  .tx-bubble {
-    max-width: 80%; padding: 8px 12px; border-radius: 3px;
-    font-size: 0.8rem; line-height: 1.5;
-  }
-  .tx-entry.user .tx-bubble { background: #0d1f12; color: var(--green); border: 1px solid #1a3322; }
-  .tx-entry.bot  .tx-bubble { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-  .tx-entry.bot  .tx-bubble.streaming::after {
-    content: '▋'; color: var(--green); animation: blink 0.8s step-end infinite;
-  }
-  @keyframes blink { 50% { opacity: 0; } }
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim); flex-shrink: 0;
+  transition: background 0.25s, box-shadow 0.25s;
+}
+.dot.connected { background: var(--green); box-shadow: 0 0 7px var(--green); }
+.dot.error     { background: var(--red);   box-shadow: 0 0 5px var(--red); }
+.dot.speaking  { background: var(--amber); box-shadow: 0 0 7px var(--amber); }
 
-  .tx-placeholder { color: var(--muted); font-size: 0.75rem; text-align: center; margin: auto; opacity: 0.5; }
+/* icon button */
+.icon-btn {
+  background: none; border: 1px solid transparent; color: var(--muted);
+  cursor: pointer; padding: 6px 8px; border-radius: 4px;
+  font-size: 1rem; display: flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+  min-width: 36px; min-height: 36px; /* touch target */
+}
+.icon-btn:hover { color: var(--text); border-color: var(--border); }
 
-  .connect-row { display: flex; gap: 8px; }
+/* ── Toast container ────────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  top: 58px; left: 50%; transform: translateX(-50%);
+  z-index: 300;
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  pointer-events: none;
+}
 
-  #ws-url {
-    flex: 1; background: var(--surface); border: 1px solid var(--border);
-    color: var(--muted); font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.75rem; padding: 9px 12px; border-radius: 3px; outline: none;
-    transition: border-color 0.15s;
-  }
-  #ws-url:focus { border-color: var(--dim); color: var(--text); }
+.toast {
+  border-radius: 20px; padding: 5px 14px;
+  font-size: 0.67rem; white-space: nowrap;
+  border: 1px solid var(--border); background: var(--surface);
+  animation: toastIn 0.18s ease, toastOut 0.28s ease 2.4s forwards;
+}
+.toast.ok   { color: var(--green); border-color: #1c3826; }
+.toast.err  { color: var(--red);   border-color: #3a1010; }
+.toast.int  { color: var(--amber); border-color: #3a2800; }
+.toast.info { color: var(--muted); }
 
-  #btn {
-    padding: 9px 20px; font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.75rem; font-weight: 500; background: var(--surface);
-    color: var(--text); border: 1px solid var(--border); border-radius: 3px;
-    cursor: pointer; white-space: nowrap; transition: all 0.15s; letter-spacing: 0.05em;
-  }
-  #btn:hover:not(:disabled) { border-color: var(--dim); color: #fff; }
-  #btn.live { border-color: var(--green); color: var(--green); background: #0d1f12; }
-  #btn:disabled { opacity: 0.35; cursor: not-allowed; }
+@keyframes toastIn  { from { opacity:0; transform: translateY(-6px); } to { opacity:1; transform:none; } }
+@keyframes toastOut { to   { opacity:0; transform: translateY(-6px); } }
 
-  aside { grid-area: sidebar; background: var(--bg); display: flex; flex-direction: column; overflow: hidden; }
+/* ── Layout shell ───────────────────────────────────────────────── */
+.layout {
+  flex: 1; display: flex; overflow: hidden;
+}
 
-  .panel { border-bottom: 1px solid var(--border); padding: 16px; }
-  .panel-title { font-size: 0.6rem; color: var(--muted); letter-spacing: 0.15em; margin-bottom: 12px; }
+/* ── Chat pane ──────────────────────────────────────────────────── */
+.chat-pane {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+}
 
-  #status-dot {
-    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-    background: var(--dim); margin-right: 6px; transition: background 0.3s;
-  }
-  #status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  #status-dot.error     { background: var(--red); }
-  #status-dot.speaking  { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
-  #status-text { font-size: 0.75rem; color: var(--muted); }
+#transcript {
+  flex: 1; overflow-y: auto;
+  padding: 16px 16px 6px;
+  display: flex; flex-direction: column; gap: 12px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+#transcript::-webkit-scrollbar { width: 3px; }
+#transcript::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
 
-  .meter-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-  .meter-label { font-size: 0.6rem; color: var(--muted); width: 24px; }
-  .meter-track { flex: 1; height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
-  .meter-fill  { height: 100%; width: 0%; border-radius: 2px; background: var(--green); transition: width 0.04s; }
+.tx-placeholder {
+  color: var(--muted); font-size: 0.72rem;
+  text-align: center; margin: auto; opacity: 0.4;
+  line-height: 2;
+}
 
-  .buffer-nums { display: flex; justify-content: space-between; margin-bottom: 6px; }
-  #buf-ms   { font-size: 0.9rem; color: var(--amber); }
-  #buf-peak { font-size: 0.65rem; color: var(--muted); }
-  .buf-track { width: 100%; height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
-  #buf-bar  { height: 100%; width: 0%; background: var(--amber); border-radius: 2px; transition: width 0.06s, background 0.3s; }
-  #buf-bar.flush { animation: barFlush 0.4s ease-out forwards; }
-  @keyframes barFlush { 0% { background: var(--red); width: 100%; } 100% { background: var(--red); width: 0%; } }
+.tx-entry { display: flex; flex-direction: column; gap: 3px; animation: fadeUp 0.15s ease; }
+.tx-entry.user { align-items: flex-end; }
+.tx-entry.bot  { align-items: flex-start; }
+.tx-label      { font-size: 0.58rem; color: var(--muted); letter-spacing: 0.1em; margin: 0 4px; }
 
-  #log {
-    flex: 1; overflow-y: auto; padding: 12px;
-    display: flex; flex-direction: column; gap: 3px;
-    font-size: 0.68rem; min-height: 0;
-  }
-  #log::-webkit-scrollbar { width: 2px; }
-  #log::-webkit-scrollbar-thumb { background: var(--dim); }
-  .log-entry { color: var(--muted); line-height: 1.4; }
-  .log-entry .ts  { color: var(--dim); margin-right: 6px; }
-  .log-entry.ok   .msg { color: var(--green); }
-  .log-entry.err  .msg { color: var(--red); }
-  .log-entry.info .msg { color: var(--muted); }
-  .log-entry.int  .msg { color: var(--red); }
-  .log-entry.turn .msg { color: var(--blue); }
+.tx-bubble {
+  max-width: min(82%, 400px);
+  padding: 9px 13px; border-radius: 4px;
+  font-size: 0.8rem; line-height: 1.55; word-break: break-word;
+}
+.tx-entry.user .tx-bubble { background: #0b1c10; color: var(--green); border: 1px solid #1b3322; }
+.tx-entry.bot  .tx-bubble { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.tx-entry.bot  .tx-bubble.streaming::after {
+  content: '▋'; color: var(--green); animation: blink 0.8s step-end infinite;
+}
 
-  footer {
-    grid-area: footer; background: var(--bg);
-    padding: 8px 24px; display: flex; align-items: center; gap: 16px;
-    border-top: 1px solid var(--border);
-  }
-  footer .f-item { font-size: 0.65rem; color: var(--muted); }
-  footer .f-item .k { color: var(--dim); }
+/* event badges inside transcript */
+.tx-event {
+  align-self: center;
+  font-size: 0.6rem; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 3px 10px;
+  animation: fadeUp 0.15s ease;
+}
+.tx-event.int  { color: var(--amber); border-color: #3a2800; }
+.tx-event.turn { color: var(--blue);  border-color: #1a2a3a; }
+.tx-event.ok   { color: var(--green); border-color: #1c3826; }
 
-  #vad-state { margin-left: auto; font-size: 0.65rem; color: var(--dim); display: flex; align-items: center; gap: 5px; }
-  #vad-dot   { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); transition: background 0.1s; }
-  #vad-dot.speech { background: var(--red); box-shadow: 0 0 4px var(--red); }
+@keyframes blink   { 50% { opacity: 0; } }
+@keyframes fadeUp  { from { opacity:0; transform: translateY(5px); } to { opacity:1; transform:none; } }
+
+/* ── Input area ─────────────────────────────────────────────────── */
+.input-area {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 8px;
+  flex-shrink: 0;
+  background: var(--bg);
+}
+
+.row { display: flex; gap: 8px; align-items: center; }
+
+input[type=text] {
+  flex: 1; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); font-family: var(--font);
+  font-size: 0.8rem; padding: 10px 12px; border-radius: 4px; outline: none;
+  transition: border-color 0.15s;
+  -webkit-appearance: none;
+}
+input[type=text]::placeholder { color: var(--muted); }
+input[type=text]:focus { border-color: var(--dim); }
+
+.btn {
+  padding: 10px 16px; font-family: var(--font);
+  font-size: 0.72rem; font-weight: 500;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; white-space: nowrap;
+  transition: all 0.15s;
+  min-height: 42px; min-width: 44px; /* touch */
+  -webkit-appearance: none;
+}
+.btn:hover:not(:disabled) { border-color: var(--dim); color: #fff; }
+.btn.live    { border-color: var(--green); color: var(--green); background: #0a180e; }
+.btn.send    { color: var(--muted); font-size: 1rem; padding: 10px 13px; }
+.btn.send:hover:not(:disabled) { color: var(--green); border-color: var(--green); }
+.btn:disabled { opacity: 0.32; cursor: not-allowed; }
+
+/* vad + mic row */
+.vad-row { display: flex; align-items: center; gap: 9px; }
+.vad-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim); flex-shrink: 0;
+  transition: background 0.1s, box-shadow 0.1s;
+}
+.vad-dot.speech { background: var(--red); box-shadow: 0 0 5px var(--red); }
+.vad-label { font-size: 0.62rem; color: var(--muted); flex-shrink: 0; }
+.mic-track { flex: 1; height: 2px; background: var(--dim); border-radius: 1px; overflow: hidden; }
+.mic-fill  { height: 100%; width: 0%; background: var(--green); border-radius: 1px; transition: width 0.04s; }
+
+/* ── Sidebar (desktop) ──────────────────────────────────────────── */
+.sidebar {
+  width: 288px; flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  display: none; /* hidden on mobile */
+  flex-direction: column; overflow: hidden;
+}
+
+.panel { border-bottom: 1px solid var(--border); padding: 13px 15px; }
+.panel-title {
+  font-size: 0.58rem; color: var(--muted);
+  letter-spacing: 0.16em; margin-bottom: 10px;
+  text-transform: uppercase;
+}
+
+.s-meter-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.s-meter-lbl { font-size: 0.6rem; color: var(--muted); width: 24px; flex-shrink: 0; }
+.s-meter-track { flex: 1; height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+.s-meter-fill  { height: 100%; width: 0%; background: var(--green); border-radius: 2px; transition: width 0.04s; }
+
+.buf-nums { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+#buf-ms   { font-size: 0.88rem; color: var(--amber); transition: color 0.2s; }
+#buf-peak { font-size: 0.62rem; color: var(--muted); }
+.buf-track { height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+#buf-bar  {
+  height: 100%; width: 0%; background: var(--amber);
+  border-radius: 2px; transition: width 0.06s, background 0.2s;
+}
+#buf-bar.flush { animation: barFlush 0.45s ease-out forwards; }
+@keyframes barFlush { 0% { background:var(--red); width:100%; } 100% { background:var(--red); width:0%; } }
+
+/* ── VAD sliders (shared styles) ────────────────────────────────── */
+.slider-group  { display: flex; flex-direction: column; gap: 13px; }
+.slider-row    { display: flex; flex-direction: column; gap: 5px; }
+.slider-hd     { display: flex; justify-content: space-between; align-items: baseline; }
+.slider-name   { font-size: 0.62rem; color: var(--muted); }
+.slider-val    { font-size: 0.68rem; color: var(--text); font-weight: 500; }
+
+input[type=range] {
+  width: 100%; height: 3px;
+  -webkit-appearance: none; appearance: none;
+  background: var(--dim); border-radius: 2px; outline: none; cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--green); cursor: pointer;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+input[type=range]::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--green); cursor: pointer;
+  border: 2px solid var(--bg);
+}
+
+.apply-btn {
+  margin-top: 10px; width: 100%;
+  padding: 8px 0; font-family: var(--font); font-size: 0.68rem;
+  background: none; color: var(--green);
+  border: 1px solid #1c3826; border-radius: 3px;
+  cursor: pointer; transition: background 0.15s;
+}
+.apply-btn:hover { background: #0a180e; }
+
+/* ── Sidebar log ─────────────────────────────────────────────────── */
+.log-header {
+  padding: 10px 15px 5px;
+  font-size: 0.58rem; color: var(--muted); letter-spacing: 0.16em; text-transform: uppercase;
+}
+#log {
+  flex: 1; overflow-y: auto; padding: 4px 12px 10px;
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 0.63rem; min-height: 0;
+}
+#log::-webkit-scrollbar { width: 2px; }
+#log::-webkit-scrollbar-thumb { background: var(--dim); }
+
+.log-line { color: var(--muted); display: flex; gap: 0; line-height: 1.6; }
+.log-ts  { color: var(--dim); margin-right: 6px; flex-shrink: 0; }
+.log-msg { }
+.log-msg.ok   { color: var(--green); }
+.log-msg.err  { color: var(--red); }
+.log-msg.int  { color: var(--amber); }
+.log-msg.turn { color: var(--blue); }
+
+/* ── Mobile bottom bar ───────────────────────────────────────────── */
+.mobile-bar {
+  display: flex; align-items: center;
+  padding: 9px 14px;
+  padding-bottom: max(9px, var(--safe-b));
+  border-top: 1px solid var(--border);
+  gap: 10px; flex-shrink: 0;
+  background: var(--bg);
+}
+
+#btn-mobile { padding: 8px 14px; font-size: 0.7rem; min-height: 38px; }
+
+.mb-vad { display: flex; align-items: center; gap: 6px; }
+.mb-stats { display: flex; gap: 12px; margin-left: auto; }
+
+/* ── Settings drawer ─────────────────────────────────────────────── */
+.overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 50;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.overlay.show { display: block; }
+
+.drawer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  z-index: 51;
+  transform: translateY(100%);
+  transition: transform 0.26s cubic-bezier(0.4,0,0.2,1);
+  padding-bottom: max(20px, var(--safe-b));
+  max-height: 88dvh; overflow-y: auto;
+}
+.drawer.open { transform: translateY(0); }
+
+.drawer-grip {
+  display: flex; justify-content: center; padding: 12px 0 6px;
+}
+.drawer-grip::before {
+  content: ''; width: 34px; height: 3px;
+  background: var(--dim); border-radius: 2px;
+}
+
+.drawer-section {
+  padding: 12px 18px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.drawer-section:last-child { border-bottom: none; }
+.drawer-section-title {
+  font-size: 0.58rem; color: var(--muted); letter-spacing: 0.16em;
+  text-transform: uppercase; margin-bottom: 14px;
+}
+
+#drawer-log {
+  max-height: 140px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 0.63rem;
+}
+#drawer-log::-webkit-scrollbar { width: 2px; }
+#drawer-log::-webkit-scrollbar-thumb { background: var(--dim); }
+
+/* ── Desktop breakpoint ──────────────────────────────────────────── */
+@media (min-width: 680px) {
+  .url-row      { display: flex; }
+  .header-stats { display: flex; }
+  .sidebar      { display: flex; }
+  .mobile-bar   { display: none; }
+  #mobile-connect-row { display: none !important; }
+}
+
+@media (max-width: 679px) {
+  /* On mobile, always hide desktop URL row */
+  .url-row { display: none !important; }
+}
 </style>
 </head>
 <body>
 
+<!-- ════════════════ HEADER ════════════════ -->
 <header>
   <div class="logo">rust<span>vani</span></div>
+
+  <div class="url-row">
+    <input type="text" id="ws-url" value="wss://rustvani.onrender.com/ws" spellcheck="false" />
+    <button class="btn" id="btn">connect</button>
+  </div>
+
   <div class="header-right">
-    <div class="stat-pill">turns <span class="val" id="turn-count">0</span></div>
-    <div class="stat-pill">interrupts <span class="val red" id="int-count">0</span></div>
+    <div class="header-stats">
+      <div class="stat-pill">turns <span class="val" id="h-turns">0</span></div>
+      <div class="stat-pill">interrupts <span class="val red" id="h-ints">0</span></div>
+    </div>
+    <div class="status-pill">
+      <div class="dot" id="status-dot"></div>
+      <span id="status-text">idle</span>
+    </div>
+    <button class="icon-btn" id="settings-btn" title="Settings &amp; Log" aria-label="Settings">⚙</button>
   </div>
 </header>
 
-<main>
-  <div id="transcript">
-    <div class="tx-placeholder" id="tx-placeholder">connect to begin</div>
-  </div>
-  <div class="connect-row">
-    <input id="ws-url" type="text" value="wss://rustvani.onrender.com/ws" spellcheck="false" />
-    <button id="btn">connect</button>
-  </div>
-</main>
+<!-- ════════════════ TOASTS ════════════════ -->
+<div class="toast-container" id="toasts" aria-live="polite"></div>
 
-<aside>
-  <div class="panel">
-    <div class="panel-title">STATUS</div>
-    <div><span id="status-dot"></span><span id="status-text">idle</span></div>
-    <div class="meter-row">
-      <span class="meter-label">mic</span>
-      <div class="meter-track"><div class="meter-fill" id="mic-meter"></div></div>
+<!-- ════════════════ LAYOUT ════════════════ -->
+<div class="layout">
+
+  <!-- CHAT PANE -->
+  <div class="chat-pane">
+    <div id="transcript" role="log" aria-live="polite">
+      <div class="tx-placeholder" id="tx-placeholder">connect to begin</div>
+    </div>
+
+    <div class="input-area">
+      <!-- Mobile: shown when disconnected -->
+      <div class="row" id="mobile-connect-row">
+        <input type="text" id="ws-url-mobile" value="wss://rustvani.onrender.com/ws"
+               spellcheck="false" placeholder="wss://host/ws" aria-label="Server URL" />
+      </div>
+
+      <!-- Shown when connected -->
+      <div class="row" id="text-row" style="display:none">
+        <input type="text" id="text-input"
+               placeholder="type a message…" autocomplete="off"
+               aria-label="Message input" />
+        <button class="btn send" id="send-btn" title="Send message" aria-label="Send">↑</button>
+      </div>
+
+      <!-- VAD + mic meter — shown when connected -->
+      <div class="vad-row" id="vad-row" style="display:none">
+        <div class="vad-dot" id="vad-dot"></div>
+        <span class="vad-label" id="vad-label">vad off</span>
+        <div class="mic-track"><div class="mic-fill" id="mic-meter"></div></div>
+      </div>
     </div>
   </div>
-  <div class="panel">
-    <div class="panel-title">PLAYBACK BUFFER</div>
-    <div class="buffer-nums">
-      <span id="buf-ms">— ms</span>
-      <span id="buf-peak">peak —</span>
+
+  <!-- SIDEBAR (desktop) -->
+  <aside class="sidebar">
+
+    <!-- Status -->
+    <div class="panel">
+      <div class="panel-title">Status</div>
+      <div style="font-size:0.72rem; color:var(--muted)" id="sb-status">idle</div>
+      <div class="s-meter-row">
+        <span class="s-meter-lbl">mic</span>
+        <div class="s-meter-track"><div class="s-meter-fill" id="sb-mic"></div></div>
+      </div>
+      <div style="margin-top:9px; display:flex; gap:16px;">
+        <div class="stat-pill">turns <span class="val" id="sb-turns">0</span></div>
+        <div class="stat-pill">interrupts <span class="val red" id="sb-ints">0</span></div>
+      </div>
     </div>
-    <div class="buf-track"><div id="buf-bar"></div></div>
+
+    <!-- Buffer -->
+    <div class="panel">
+      <div class="panel-title">Playback Buffer</div>
+      <div class="buf-nums">
+        <span id="buf-ms">— ms</span>
+        <span id="buf-peak">peak —</span>
+      </div>
+      <div class="buf-track"><div id="buf-bar"></div></div>
+    </div>
+
+    <!-- VAD params -->
+    <div class="panel">
+      <div class="panel-title">VAD Parameters</div>
+      <div class="slider-group" id="sliders-desktop"></div>
+      <button class="apply-btn" id="apply-desktop">apply &amp; restart vad</button>
+    </div>
+
+    <div class="log-header">Event Log</div>
+    <div id="log" role="log" aria-live="off"></div>
+  </aside>
+</div>
+
+<!-- ════════════════ MOBILE BOTTOM BAR ════════════════ -->
+<div class="mobile-bar">
+  <button class="btn" id="btn-mobile">connect</button>
+  <div class="mb-vad">
+    <div class="vad-dot" id="mb-vad-dot"></div>
+    <span style="font-size:0.62rem; color:var(--muted)" id="mb-vad-label">vad off</span>
   </div>
-  <div id="log"></div>
-</aside>
+  <div class="mb-stats">
+    <div class="stat-pill">turns <span class="val" id="mb-turns">0</span></div>
+    <div class="stat-pill">interrupts <span class="val red" id="mb-ints">0</span></div>
+  </div>
+  <button class="icon-btn" id="settings-btn-mob" title="Settings &amp; Log" aria-label="Open settings">≡</button>
+</div>
 
-<footer>
-  <div class="f-item"><span class="k">protocol</span> ravi 1.2.0</div>
-  <div class="f-item"><span class="k">vad</span> silero @0.7</div>
-  <div class="f-item"><span class="k">capture</span> 16 kHz pcm</div>
-  <div id="vad-state"><div id="vad-dot"></div><span id="vad-label">vad off</span></div>
-</footer>
+<!-- ════════════════ SETTINGS DRAWER (mobile) ════════════════ -->
+<div class="overlay" id="overlay"></div>
+<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Settings">
+  <div class="drawer-grip"></div>
 
+  <div class="drawer-section">
+    <div class="drawer-section-title">VAD Parameters</div>
+    <div class="slider-group" id="sliders-mobile"></div>
+    <button class="apply-btn" id="apply-mobile">apply &amp; restart vad</button>
+  </div>
+
+  <div class="drawer-section">
+    <div class="drawer-section-title">Event Log</div>
+    <div id="drawer-log" role="log"></div>
+  </div>
+</div>
+
+<!-- ════════════════ SCRIPT ════════════════ -->
 <script type="module">
 import { RaviClient } from './src/ravi/client.js';
 import { RaviVad }    from './src/audio/vad.js';
 
+/* ── Extend RaviClient with sendText ──────────────────────────── */
+
+class RaviClientEx extends RaviClient {
+  sendText(content, runImmediately = true) {
+    if (!this._running || !this._ws) return false;
+    this._ws.send(JSON.stringify({
+      label: 'ravi', type: 'send-text',
+      id:   Math.random().toString(36).slice(2, 10),
+      data: { content, options: { run_immediately: runImmediately, audio_response: true } },
+    }));
+    return true;
+  }
+}
+
+/* ── DOM refs ─────────────────────────────────────────────────── */
+
 const $ = id => document.getElementById(id);
 const el = {
-  btn:         $('btn'),
-  url:         $('ws-url'),
-  statusDot:   $('status-dot'),
-  statusText:  $('status-text'),
-  micMeter:    $('mic-meter'),
-  bufMs:       $('buf-ms'),
-  bufPeak:     $('buf-peak'),
-  bufBar:      $('buf-bar'),
-  log:         $('log'),
-  transcript:  $('transcript'),
-  placeholder: $('tx-placeholder'),
-  turnCount:   $('turn-count'),
-  intCount:    $('int-count'),
-  vadDot:      $('vad-dot'),
-  vadLabel:    $('vad-label'),
+  btn:           $('btn'),           btnMobile:    $('btn-mobile'),
+  wsUrl:         $('ws-url'),        wsUrlMobile:  $('ws-url-mobile'),
+  statusDot:     $('status-dot'),    statusText:   $('status-text'),
+  sbStatus:      $('sb-status'),
+  micMeter:      $('mic-meter'),     sbMic:        $('sb-mic'),
+  transcript:    $('transcript'),    placeholder:  $('tx-placeholder'),
+  mobileConnRow: $('mobile-connect-row'),
+  textRow:       $('text-row'),      textInput:    $('text-input'),
+  sendBtn:       $('send-btn'),      vadRow:       $('vad-row'),
+  vadDot:        $('vad-dot'),       vadLabel:     $('vad-label'),
+  mbVadDot:      $('mb-vad-dot'),    mbVadLabel:   $('mb-vad-label'),
+  toasts:        $('toasts'),
+  log:           $('log'),           drawerLog:    $('drawer-log'),
+  bufMs:         $('buf-ms'),        bufPeak:      $('buf-peak'), bufBar: $('buf-bar'),
+  overlay:       $('overlay'),       drawer:       $('drawer'),
+  settingsBtn:   $('settings-btn'),  settingsBtnM: $('settings-btn-mob'),
+  applyDesktop:  $('apply-desktop'), applyMobile:  $('apply-mobile'),
+  slidersDesktop:$('sliders-desktop'), slidersMobile: $('sliders-mobile'),
+  hTurns: $('h-turns'), hInts: $('h-ints'),
+  sbTurns: $('sb-turns'), sbInts: $('sb-ints'),
+  mbTurns: $('mb-turns'), mbInts: $('mb-ints'),
 };
+
+/* ── VAD param definitions ────────────────────────────────────── */
+
+const VAD_DEFS = [
+  { key: 'positiveSpeechThreshold', label: 'speech threshold',  min: 0.30, max: 0.95, step: 0.01, def: 0.70, fmt: v => v.toFixed(2) },
+  { key: 'negativeSpeechThreshold', label: 'silence threshold', min: 0.20, max: 0.80, step: 0.01, def: 0.55, fmt: v => v.toFixed(2) },
+  { key: 'redemptionMs',            label: 'redemption ms',     min: 200,  max: 3000, step: 50,   def: 1400, fmt: v => v.toFixed(0) },
+  { key: 'minSpeechMs',             label: 'min speech ms',     min: 100,  max: 1500, step: 50,   def: 400,  fmt: v => v.toFixed(0) },
+];
+
+const vadParams = Object.fromEntries(VAD_DEFS.map(d => [d.key, d.def]));
+
+function buildSliders(container) {
+  container.innerHTML = '';
+  VAD_DEFS.forEach(def => {
+    const valId = `sv-${def.key}-${container.id}`;
+    const row = document.createElement('div');
+    row.className = 'slider-row';
+
+    const hd = document.createElement('div');
+    hd.className = 'slider-hd';
+    hd.innerHTML = `<span class="slider-name">${def.label}</span>
+                    <span class="slider-val" id="${valId}">${def.fmt(vadParams[def.key])}</span>`;
+
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min  = def.min; input.max = def.max; input.step = def.step;
+    input.value = vadParams[def.key];
+    input.dataset.key = def.key;
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      vadParams[def.key] = v;
+      const disp = def.fmt(v);
+      // update all val labels for this key
+      document.querySelectorAll(`[id^="sv-${def.key}-"]`).forEach(el => el.textContent = disp);
+      // sync sibling slider
+      document.querySelectorAll(`input[data-key="${def.key}"]`).forEach(s => {
+        if (s !== input) s.value = v;
+      });
+    });
+
+    row.append(hd, input);
+    container.appendChild(row);
+  });
+}
+
+buildSliders(el.slidersDesktop);
+buildSliders(el.slidersMobile);
+
+/* ── State ────────────────────────────────────────────────────── */
 
 let client    = null;
 let vad       = null;
 let rafHandle = null;
 let peakMs    = 0;
-let _botBubble = null;
-let _botAccum  = '';
+let botBubble = null;
+let botAccum  = '';
 
-// ---- Helpers ----
+/* ── Toast ────────────────────────────────────────────────────── */
 
-function setStatus(text, cls = '') {
-  el.statusText.textContent = text;
-  el.statusDot.className    = cls;
+function toast(msg, level = 'info') {
+  const t = document.createElement('div');
+  t.className = `toast ${level}`;
+  t.textContent = msg;
+  el.toasts.appendChild(t);
+  setTimeout(() => t.remove(), 2900);
 }
 
-function log(msg, level = 'info') {
-  const t   = new Date().toLocaleTimeString('en-GB', { hour12: false });
-  const row = document.createElement('div');
-  row.className = `log-entry ${level}`;
-  row.innerHTML = `<span class="ts">${t}</span><span class="msg">${msg}</span>`;
-  el.log.appendChild(row);
-  el.log.scrollTop = el.log.scrollHeight;
+/* ── Log ──────────────────────────────────────────────────────── */
+
+function addLog(msg, level = 'info') {
+  const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  [el.log, el.drawerLog].forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'log-line';
+    row.innerHTML = `<span class="log-ts">${ts}</span><span class="log-msg ${level}">${escHtml(msg)}</span>`;
+    c.appendChild(row);
+    c.scrollTop = c.scrollHeight;
+  });
 }
 
-function addUserTranscript(text, isFinal) {
-  if (!text.trim() || !isFinal) return;
-  el.placeholder.style.display = 'none';
+/* ── Transcript helpers ───────────────────────────────────────── */
+
+function hidePlaceholder() { el.placeholder.style.display = 'none'; }
+
+function addUserBubble(text) {
+  if (!text.trim()) return;
+  hidePlaceholder();
   const e = document.createElement('div');
   e.className = 'tx-entry user';
-  e.innerHTML = `<div class="tx-label">you</div><div class="tx-bubble">${text}</div>`;
+  e.innerHTML = `<div class="tx-label">you</div><div class="tx-bubble">${escHtml(text)}</div>`;
   el.transcript.appendChild(e);
-  el.transcript.scrollTop = el.transcript.scrollHeight;
+  scrollTranscript();
 }
 
 function appendBotToken(text) {
-  el.placeholder.style.display = 'none';
-  if (!_botBubble) {
+  hidePlaceholder();
+  if (!botBubble) {
     const e = document.createElement('div');
     e.className = 'tx-entry bot';
     e.innerHTML = '<div class="tx-label">vani</div><div class="tx-bubble streaming"></div>';
     el.transcript.appendChild(e);
-    _botBubble = e.querySelector('.tx-bubble');
-    _botAccum  = '';
+    botBubble = e.querySelector('.tx-bubble');
+    botAccum = '';
   }
-  _botAccum += text;
-  _botBubble.textContent = _botAccum;
-  el.transcript.scrollTop = el.transcript.scrollHeight;
+  botAccum += text;
+  botBubble.textContent = botAccum;
+  scrollTranscript();
 }
 
 function finalizeBotBubble() {
-  if (_botBubble) { _botBubble.classList.remove('streaming'); _botBubble = null; _botAccum = ''; }
+  if (botBubble) { botBubble.classList.remove('streaming'); botBubble = null; botAccum = ''; }
 }
 
+function addTxEvent(msg, level = '') {
+  hidePlaceholder();
+  const e = document.createElement('div');
+  e.className = `tx-event ${level}`;
+  e.textContent = msg;
+  el.transcript.appendChild(e);
+  scrollTranscript();
+}
+
+function scrollTranscript() {
+  el.transcript.scrollTop = el.transcript.scrollHeight;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Status ───────────────────────────────────────────────────── */
+
+function setStatus(text, cls = '') {
+  el.statusText.textContent = text;
+  el.sbStatus.textContent   = text;
+  el.statusDot.className    = 'dot' + (cls ? ' ' + cls : '');
+}
+
+/* ── Counts ───────────────────────────────────────────────────── */
+
+function setTurns(n) {
+  [el.hTurns, el.sbTurns, el.mbTurns].forEach(e => e.textContent = n);
+}
+function setInts(n) {
+  [el.hInts, el.sbInts, el.mbInts].forEach(e => e.textContent = n);
+}
+
+/* ── Buffer loop ──────────────────────────────────────────────── */
+
 function startBufferLoop() {
+  peakMs = 0;
   function tick() {
     if (!client?.isRunning) return;
     const ms = client.bufferedMs;
     if (client.peakMs > peakMs) peakMs = client.peakMs;
     el.bufMs.textContent   = ms.toFixed(0) + ' ms';
     el.bufPeak.textContent = 'peak ' + peakMs.toFixed(0);
-    el.bufBar.style.width  = Math.min(100, (ms / 15_000) * 100).toFixed(1) + '%';
-    const c = ms < 500 ? 'var(--green)' : ms < 5_000 ? 'var(--amber)' : 'var(--red)';
+    el.bufBar.style.width  = Math.min(100, (ms / 12_000) * 100).toFixed(1) + '%';
+    const c = ms < 600 ? 'var(--green)' : ms < 4_000 ? 'var(--amber)' : 'var(--red)';
     el.bufBar.style.background = c;
     el.bufMs.style.color       = c;
     rafHandle = requestAnimationFrame(tick);
@@ -319,99 +748,239 @@ function stopBufferLoop() {
   el.bufMs.textContent   = '— ms';
   el.bufPeak.textContent = 'peak —';
   el.bufBar.style.width  = '0%';
-  peakMs = 0;
 }
 
-// ---- Connect / disconnect ----
+/* ── VAD ──────────────────────────────────────────────────────── */
+
+function setVadSpeech(active) {
+  el.vadDot.classList.toggle('speech', active);
+  el.mbVadDot.classList.toggle('speech', active);
+}
+
+function setVadLabel(text) {
+  el.vadLabel.textContent   = text;
+  el.mbVadLabel.textContent = text;
+}
+
+async function startVad() {
+  vad?.stop();
+  vad = new RaviVad({
+    ...vadParams,
+    onSpeechStart: () => {
+      setVadSpeech(true);
+      client?.interrupt('vad');
+    },
+    onSpeechEnd: () => setVadSpeech(false),
+  });
+  try {
+    await vad.start();
+    const pos = vadParams.positiveSpeechThreshold.toFixed(2);
+    setVadLabel(`vad active (${pos})`);
+    addLog(`vad ready pos=${pos} neg=${vadParams.negativeSpeechThreshold.toFixed(2)} `
+         + `redemption=${vadParams.redemptionMs}ms`, 'ok');
+  } catch (e) {
+    setVadLabel('vad failed');
+    addLog('vad: ' + e.message, 'err');
+  }
+}
+
+/* ── Connected / disconnected UI state ───────────────────────── */
+
+function setConnectedUI(connected) {
+  // mobile connect row — only relevant on mobile, CSS hides on desktop
+  el.mobileConnRow.style.display = connected ? 'none' : 'flex';
+
+  el.textRow.style.display = connected ? 'flex'  : 'none';
+  el.vadRow.style.display  = connected ? 'flex'  : 'none';
+
+  [el.btn, el.btnMobile].forEach(b => {
+    b.textContent = connected ? 'disconnect' : 'connect';
+    b.classList.toggle('live', connected);
+    b.disabled = false;
+  });
+}
+
+/* ── URL helpers ──────────────────────────────────────────────── */
+
+function getUrl() {
+  const raw = (window.innerWidth < 680 ? el.wsUrlMobile.value : el.wsUrl.value).trim();
+  return raw.startsWith('ws') ? raw : 'wss://' + raw;
+}
+
+// Keep URL inputs in sync
+el.wsUrl.addEventListener('input',       () => el.wsUrlMobile.value = el.wsUrl.value);
+el.wsUrlMobile.addEventListener('input', () => el.wsUrl.value = el.wsUrlMobile.value);
+
+/* ── Connect ──────────────────────────────────────────────────── */
 
 async function connect() {
-  el.btn.disabled = true;
+  [el.btn, el.btnMobile].forEach(b => { b.disabled = true; b.textContent = '…'; });
   setStatus('connecting…', '');
 
-  client = new RaviClient({
-    onConnected()     { setStatus('connected', 'connected'); el.btn.textContent = 'disconnect'; el.btn.classList.add('live'); el.btn.disabled = false; startBufferLoop(); log('connected', 'ok'); },
-    onDisconnected()  { teardown(); },
-    onBotReady()      { setStatus('ready', 'connected'); },
-    onBotStartedSpeaking() { setStatus('bot speaking', 'speaking'); },
-    onBotStoppedSpeaking() { setStatus('ready', 'connected'); finalizeBotBubble(); },
+  client = new RaviClientEx({
+
+    onConnected() {
+      setConnectedUI(true);
+      setStatus('connected', 'connected');
+      startBufferLoop();
+      toast('connected', 'ok');
+      addLog('connected', 'ok');
+      addTxEvent('connected', 'ok');
+    },
+
+    onDisconnected() { teardown(); },
+
+    onBotReady() {
+      setStatus('ready', 'connected');
+      toast('bot ready', 'ok');
+      addLog('bot ready', 'ok');
+      addTxEvent('bot ready', 'ok');
+    },
+
+    onBotStartedSpeaking() {
+      setStatus('bot speaking', 'speaking');
+      addLog('bot speaking', 'info');
+    },
+
+    onBotStoppedSpeaking() {
+      setStatus('ready', 'connected');
+      finalizeBotBubble();
+    },
+
     onUserStartedSpeaking() { setStatus('listening…', 'connected'); },
-    onUserStoppedSpeaking() { setStatus('processing…', 'connected'); },
-    onUserTranscript(data)  { addUserTranscript(data.text, data.final); },
-    onBotLlmStarted()  { log('llm started', 'info'); },
-    onBotLlmStopped()  { log('llm stopped', 'info'); },
-    onBotLlmText(text) { appendBotToken(text); },
+    onUserStoppedSpeaking()  { setStatus('processing…', 'connected'); },
+
+    onUserTranscript(data) {
+      if (data.final && data.text?.trim()) addUserBubble(data.text);
+    },
+
+    onBotLlmStarted()   { addLog('llm ▶', 'info'); },
+    onBotLlmStopped()   { addLog('llm ■', 'info'); },
+    onBotLlmText(text)  { appendBotToken(text); },
+
     onInterrupt(source, flushedMs, count) {
-      el.intCount.textContent = count;
+      setInts(count);
       el.bufBar.classList.remove('flush');
       void el.bufBar.offsetWidth;
       el.bufBar.classList.add('flush');
       setTimeout(() => el.bufBar.classList.remove('flush'), 500);
+
       setStatus('interrupted', 'error');
-      setTimeout(() => { if (client?.isRunning) setStatus('ready', 'connected'); }, 1_000);
-      log(`interrupt [${source}] — flushed ${flushedMs.toFixed(0)} ms`, 'int');
+      setTimeout(() => { if (client?.isRunning) setStatus('ready', 'connected'); }, 900);
+
+      const label = `interrupt [${source}] · ${flushedMs.toFixed(0)} ms`;
+      toast(label, 'int');
+      addLog(label, 'int');
+      addTxEvent(label, 'int');
     },
-    onTurn(n, latencyMs)   { el.turnCount.textContent = n; log(`turn ${n} — ${latencyMs.toFixed(0)} ms`, 'turn'); },
-    onAudioLevel(peak)     { el.micMeter.style.width = Math.min(100, peak * 200) + '%'; },
-    onError(msg)           { log(msg, 'err'); setStatus('error', 'error'); },
-    onLog(msg, level)      { log(msg, level); },
+
+    onTurn(n, latencyMs) {
+      setTurns(n);
+      const label = `turn ${n} · ${latencyMs.toFixed(0)} ms`;
+      toast(label, 'info');
+      addLog(label, 'turn');
+      addTxEvent(label, 'turn');
+    },
+
+    onAudioLevel(peak) {
+      const w = Math.min(100, peak * 200) + '%';
+      el.micMeter.style.width = w;
+      el.sbMic.style.width    = w;
+    },
+
+    onError(msg) {
+      toast(msg, 'err');
+      addLog(msg, 'err');
+      setStatus('error', 'error');
+    },
+
+    onLog(msg, level) { addLog(msg, level); },
   });
 
-  const raw = el.url.value.trim();
-  const url = raw.startsWith('ws') ? raw : 'wss://' + raw;
-
   try {
-    await client.connect(url);
+    await client.connect(getUrl());
   } catch (e) {
-    log('connect failed: ' + e.message, 'err');
+    toast('connect failed', 'err');
+    addLog('connect failed: ' + e.message, 'err');
     setStatus('failed', 'error');
     client = null;
-    el.btn.disabled = false;
+    [el.btn, el.btnMobile].forEach(b => { b.disabled = false; b.textContent = 'connect'; });
     return;
   }
 
-  // Start VAD after client is connected.
-  // VAD calls client.interrupt('vad') on speech — client owns whether to act on it.
-  vad = new RaviVad({
-    onSpeechStart: () => {
-      el.vadDot.classList.add('speech');
-      client.interrupt('vad');  // no-op if bot not speaking
-    },
-    onSpeechEnd: () => {
-      el.vadDot.classList.remove('speech');
-    },
-  });
-
-  try {
-    await vad.start();
-    el.vadLabel.textContent = 'vad active';
-    log('vad ready (threshold 0.70)', 'ok');
-  } catch (e) {
-    log('vad failed: ' + e.message, 'err');
-  }
+  await startVad();
 }
+
+/* ── Teardown ─────────────────────────────────────────────────── */
 
 function teardown() {
   stopBufferLoop();
   finalizeBotBubble();
-  vad?.stop();
-  vad = null;
-  el.btn.textContent = 'connect';
-  el.btn.classList.remove('live');
-  el.btn.disabled    = false;
+  vad?.stop(); vad = null;
+  setConnectedUI(false);
+  setVadSpeech(false);
+  setVadLabel('vad off');
   el.micMeter.style.width = '0%';
-  el.vadDot.classList.remove('speech');
-  el.vadLabel.textContent = 'vad off';
+  el.sbMic.style.width    = '0%';
   setStatus('idle', '');
-  log('disconnected', 'err');
+  toast('disconnected', 'err');
+  addLog('disconnected', 'err');
+  addTxEvent('disconnected', '');
   client = null;
 }
 
 function disconnect() { client?.disconnect(); teardown(); }
 
-el.btn.addEventListener('click', () => {
-  if (client?.isRunning) disconnect();
-  else                   connect();
+/* ── Connect buttons ─────────────────────────────────────────── */
+
+[el.btn, el.btnMobile].forEach(b =>
+  b.addEventListener('click', () => client?.isRunning ? disconnect() : connect())
+);
+
+/* ── Send text ───────────────────────────────────────────────── */
+
+function sendText() {
+  const content = el.textInput.value.trim();
+  if (!content || !client?.isRunning) return;
+  if (client.sendText(content)) {
+    addUserBubble(content);
+    el.textInput.value = '';
+    addLog(`send-text: "${content.slice(0, 40)}"`, 'info');
+  }
+}
+
+el.sendBtn.addEventListener('click', sendText);
+el.textInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
 });
+
+/* ── VAD apply ───────────────────────────────────────────────── */
+
+async function applyVad() {
+  if (!client?.isRunning) { toast('connect first', 'info'); return; }
+  await startVad();
+  toast('vad restarted', 'ok');
+  closeDrawer();
+}
+
+el.applyDesktop.addEventListener('click', applyVad);
+el.applyMobile.addEventListener('click',  applyVad);
+
+/* ── Drawer ──────────────────────────────────────────────────── */
+
+function openDrawer()  { el.drawer.classList.add('open');    el.overlay.classList.add('show');    }
+function closeDrawer() { el.drawer.classList.remove('open'); el.overlay.classList.remove('show'); }
+
+el.settingsBtn.addEventListener('click',  openDrawer);
+el.settingsBtnM.addEventListener('click', openDrawer);
+el.overlay.addEventListener('click',      closeDrawer);
+
+// swipe down to close
+let touchStartY = 0;
+el.drawer.addEventListener('touchstart', e => { touchStartY = e.touches[0].clientY; }, { passive: true });
+el.drawer.addEventListener('touchend',   e => {
+  if (e.changedTouches[0].clientY - touchStartY > 60) closeDrawer();
+}, { passive: true });
 </script>
 </body>
 </html>
