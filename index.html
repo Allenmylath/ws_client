@@ -89,6 +89,29 @@ header { display: flex; align-items: center; padding: 11px 16px; border-bottom: 
 .tx-data-card .order-summary { font-size: 0.72rem; line-height: 1.6; color: var(--text); white-space: pre-line; padding: 4px 0; }
 .tx-data-card .order-total { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 0.76rem; color: var(--green); font-weight: 500; }
 
+/* ── Menu card ──────────────────────────────────────────────────── */
+.tx-menu-card { align-self: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; animation: fadeUp 0.2s ease; overflow: hidden; }
+.tx-menu-card .menu-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.tx-menu-card .menu-icon { font-size: 1.1rem; }
+.tx-menu-card .menu-title { font-size: 0.68rem; color: var(--green); letter-spacing: 0.12em; text-transform: uppercase; font-weight: 500; }
+.tx-menu-card .menu-section { margin-bottom: 12px; }
+.tx-menu-card .menu-section:last-child { margin-bottom: 0; }
+.tx-menu-card .section-title { font-size: 0.58rem; color: var(--muted); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.tx-menu-card .pizza-item { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.tx-menu-card .pizza-item:last-child { border-bottom: none; }
+.tx-menu-card .pizza-name-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.tx-menu-card .pizza-name { font-size: 0.78rem; color: var(--text); font-weight: 500; }
+.tx-menu-card .pizza-badge { font-size: 0.55rem; padding: 1px 5px; border-radius: 3px; letter-spacing: 0.04em; }
+.tx-menu-card .pizza-badge.veg { color: var(--green); border: 1px solid #1c3826; background: #0a180e; }
+.tx-menu-card .pizza-desc { font-size: 0.66rem; color: var(--muted); margin-bottom: 4px; line-height: 1.4; }
+.tx-menu-card .pizza-sizes { display: flex; gap: 10px; flex-wrap: wrap; }
+.tx-menu-card .size-chip { font-size: 0.64rem; color: var(--muted); display: flex; gap: 4px; }
+.tx-menu-card .size-chip .size-name { color: var(--text); }
+.tx-menu-card .size-chip .size-price { color: var(--green); }
+.tx-menu-card .toppings-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.tx-menu-card .topping-chip { font-size: 0.66rem; padding: 3px 8px; border-radius: 3px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); color: var(--text); display: flex; gap: 5px; }
+.tx-menu-card .topping-chip .tp-price { color: var(--green); font-size: 0.6rem; }
+
 .input-area { padding: 10px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; background: var(--bg); }
 .row { display: flex; gap: 8px; align-items: center; }
 input[type=text] { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--font); font-size: 0.8rem; padding: 10px 12px; border-radius: 4px; outline: none; transition: border-color 0.15s; -webkit-appearance: none; }
@@ -282,6 +305,89 @@ function addTxEvent(msg, level = '') { hidePlaceholder(); const e = document.cre
 function scrollTranscript() { el.transcript.scrollTop = el.transcript.scrollHeight; }
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+/* ── Menu card rendering ─────────────────────────────────────── */
+
+function addMenuCard(data) {
+  if (!data) return;
+  hidePlaceholder();
+
+  const pizzas = data.pizzas || [];
+  const toppings = data.toppings || [];
+
+  const card = document.createElement('div');
+  card.className = 'tx-menu-card';
+
+  // Header
+  card.innerHTML = `<div class="menu-header"><span class="menu-icon">🍕</span><span class="menu-title">Dhara Pizza Menu</span></div>`;
+
+  // Pizzas section
+  if (pizzas.length > 0) {
+    const section = document.createElement('div');
+    section.className = 'menu-section';
+    section.innerHTML = `<div class="section-title">Pizzas · ${pizzas.length}</div>`;
+
+    for (const pizza of pizzas) {
+      const item = document.createElement('div');
+      item.className = 'pizza-item';
+
+      // Name row with veg badge
+      const nameRow = document.createElement('div');
+      nameRow.className = 'pizza-name-row';
+      nameRow.innerHTML = `<span class="pizza-name">${escHtml(pizza.name)}</span>`;
+      if (pizza.vegetarian) {
+        nameRow.innerHTML += `<span class="pizza-badge veg">veg</span>`;
+      }
+      item.appendChild(nameRow);
+
+      // Description
+      if (pizza.description) {
+        const desc = document.createElement('div');
+        desc.className = 'pizza-desc';
+        desc.textContent = pizza.description;
+        item.appendChild(desc);
+      }
+
+      // Sizes with prices
+      const sizes = pizza.sizes || [];
+      if (sizes.length > 0) {
+        const sizesDiv = document.createElement('div');
+        sizesDiv.className = 'pizza-sizes';
+        for (const s of sizes) {
+          const chip = document.createElement('span');
+          chip.className = 'size-chip';
+          chip.innerHTML = `<span class="size-name">${escHtml(s.size)}</span><span class="size-price">$${Number(s.price).toFixed(2)}</span>`;
+          sizesDiv.appendChild(chip);
+        }
+        item.appendChild(sizesDiv);
+      }
+
+      section.appendChild(item);
+    }
+    card.appendChild(section);
+  }
+
+  // Toppings section
+  if (toppings.length > 0) {
+    const section = document.createElement('div');
+    section.className = 'menu-section';
+    section.innerHTML = `<div class="section-title">Extra Toppings · ${toppings.length}</div>`;
+
+    const grid = document.createElement('div');
+    grid.className = 'toppings-grid';
+    for (const t of toppings) {
+      const chip = document.createElement('span');
+      chip.className = 'topping-chip';
+      chip.innerHTML = `${escHtml(t.name)} <span class="tp-price">+$${Number(t.price).toFixed(2)}</span>`;
+      grid.appendChild(chip);
+    }
+    section.appendChild(grid);
+    card.appendChild(section);
+  }
+
+  el.transcript.appendChild(card);
+  scrollTranscript();
+}
+
 /* ── Data card rendering ─────────────────────────────────────── */
 
 const HIDDEN_COLUMNS = new Set(['embedding', 'vector', 'description']);
@@ -321,7 +427,7 @@ function addRawDataCard(functionName, rows) {
 
 function addToolResultCard(functionName, result) {
   if (!result || typeof result !== 'object') return;
-  const skip = new Set(['pg_schema', 'modify_order']);
+  const skip = new Set(['pg_schema', 'modify_order', 'fetch_menu']);
   if (skip.has(functionName)) return;
 
   // If result is or contains an array of objects, render as a data table
@@ -418,9 +524,17 @@ async function connect() {
       console.log('RESULT:', name, JSON.stringify(result, null, 2));
     },
     onFunctionCallRawResult(data) {
-      addLog(`◆ ${data.function_name} · ${Array.isArray(data.data) ? data.data.length + ' rows' : 'data'}`, 'info');
-      lastToolData = { function_name: data.function_name, data: data.data, at: Date.now() };
-      addRawDataCard(data.function_name, data.data);
+      const name = data.function_name;
+      const payload = data.data;
+      addLog(`◆ ${name} · ${Array.isArray(payload) ? payload.length + ' rows' : 'data'}`, 'info');
+      lastToolData = { function_name: name, data: payload, at: Date.now() };
+
+      // Route to dedicated renderers by tool name
+      if (name === 'fetch_menu') {
+        addMenuCard(payload);
+      } else {
+        addRawDataCard(name, payload);
+      }
     },
     onServerMessage(data) {
       if (!['function-call-start','function-call-end','function-call-in-progress','function-call-result','function-call-raw-result'].includes(data.type)) {
