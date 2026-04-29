@@ -30,6 +30,16 @@
  *   onAudioLevel(peak 0–1)
  *   onError(message)
  *   onLog(message, level)
+ *
+ *   // Server messages (custom data from observer)
+ *   onServerMessage(data)
+ *
+ *   // Function call events (routed from server-message subtypes)
+ *   onFunctionCallStart()
+ *   onFunctionCallEnd()
+ *   onFunctionCallInProgress({ id, function_name, arguments })
+ *   onFunctionCallResult({ id, function_name, result })
+ *   onFunctionCallRawResult({ id, function_name, data })
  */
 
 import { RAVI_LABEL, RaviMessages } from './messages.js';
@@ -214,6 +224,35 @@ export class RaviClient {
       case 'bot-transcription':
         this._cb.onBotTranscript?.(msg.data?.text ?? '');
         break;
+
+      // ---- Server messages (function call data, custom events) ----
+      case 'server-message': {
+        const data = msg.data ?? {};
+        this._cb.onServerMessage?.(data);
+
+        // Route function call subtypes to specific callbacks
+        switch (data.type) {
+          case 'function-call-start':
+            this._cb.onFunctionCallStart?.();
+            break;
+          case 'function-call-end':
+            this._cb.onFunctionCallEnd?.();
+            break;
+          case 'function-call-in-progress':
+            this._cb.onFunctionCallInProgress?.(data);
+            break;
+          case 'function-call-result':
+            this._cb.onFunctionCallResult?.(data);
+            break;
+          case 'function-call-raw-result':
+            this._cb.onFunctionCallRawResult?.(data);
+            break;
+          default:
+            this._cb.onLog?.(`server-message: ${data.type ?? 'unknown'}`, 'info');
+        }
+        break;
+      }
+
       case 'error':
         this._cb.onError?.(msg.data?.error ?? 'unknown error');
         break;
