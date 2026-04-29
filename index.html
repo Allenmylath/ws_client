@@ -415,6 +415,7 @@ async function connect() {
       const isError = result?.status === 'error' || result?.error;
       addLog(isError ? `✗ ${name}` : `✓ ${name}`, isError ? 'err' : 'ok');
       addToolResultCard(name, result);
+      console.log('RESULT:', name, JSON.stringify(result, null, 2));
     },
     onFunctionCallRawResult(data) {
       addLog(`◆ ${data.function_name} · ${Array.isArray(data.data) ? data.data.length + ' rows' : 'data'}`, 'info');
