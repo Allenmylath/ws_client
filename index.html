@@ -321,8 +321,14 @@ function addRawDataCard(functionName, rows) {
 
 function addToolResultCard(functionName, result) {
   if (!result || typeof result !== 'object') return;
-  const skip = new Set(['browse_menu', 'pg_schema', 'modify_order']);
+  const skip = new Set(['pg_schema', 'modify_order']);
   if (skip.has(functionName)) return;
+
+  // If result is or contains an array of objects, render as a data table
+  if (Array.isArray(result)) { addRawDataCard(functionName, result); return; }
+  const arrayField = Object.values(result).find(v => Array.isArray(v));
+  if (arrayField && arrayField.length > 0 && typeof arrayField[0] === 'object') { addRawDataCard(functionName, arrayField); return; }
+
   hidePlaceholder();
   const card = document.createElement('div'); card.className = 'tx-data-card';
   const isError = result.status === 'error' || result.error;
